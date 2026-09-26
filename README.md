@@ -159,7 +159,7 @@ RustinoWindow.RegisterNotificationAppId("MyCompany.MyApp", "My App", iconPath: @
 RustinoWindow.ShowNotification("Hello", "Shown as My App", appId: "MyCompany.MyApp");
 ```
 
-This writes `HKCU\Software\Classes\AppUserModelId\<appId>` (display name and icon; no admin rights, no shortcut). The icon must be an image file (`.png`/`.ico`) that stays at that path. On macOS and Linux the call does nothing and returns `true`.
+This writes `HKCU\Software\Classes\AppUserModelId\<appId>` (display name and icon; no admin rights, no shortcut). The icon must be an image file (`.png`/`.ico`) that stays at that path; registering again without `iconPath` removes the previous icon. `appId` must be a valid [AppUserModelID](https://learn.microsoft.com/windows/win32/shell/appids) such as `CompanyName.ProductName` (at most 128 characters, no spaces or backslashes); otherwise the call returns `false` on every platform. On macOS and Linux a valid id is accepted without writing anything.
 
 ### Menus
 

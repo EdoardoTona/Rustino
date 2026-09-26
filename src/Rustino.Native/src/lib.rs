@@ -173,9 +173,8 @@ pub unsafe extern "C" fn rustino_register_notification_app_id(
     icon: *const c_char,
 ) -> i32 {
     catch_unwind(|| {
-        // The id becomes a registry key name on Windows, so a backslash would nest keys.
-        let Some(app_id) = unsafe { util::cstr_to_string(app_id) }
-            .filter(|id| !id.is_empty() && !id.contains('\\'))
+        let Some(app_id) =
+            unsafe { util::cstr_to_string(app_id) }.filter(|id| is_valid_app_user_model_id(id))
         else {
             return 0;
         };
@@ -184,11 +183,13 @@ pub unsafe extern "C" fn rustino_register_notification_app_id(
             let display_name = unsafe { util::cstr_to_string(display_name) }
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| app_id.clone());
-            let icon_path = unsafe { util::cstr_to_string(icon) }.map(|path| {
-                std::path::absolute(&path)
-                    .map(|abs| abs.to_string_lossy().into_owned())
-                    .unwrap_or(path)
-            });
+            let icon_path = unsafe { util::cstr_to_string(icon) }
+                .filter(|path| !path.is_empty())
+                .map(|path| {
+                    std::path::absolute(&path)
+                        .map(|abs| abs.to_string_lossy().into_owned())
+                        .unwrap_or(path)
+                });
             let registered =
                 windows_notification::register_app_id(&app_id, &display_name, icon_path.as_deref());
             if registered { 1 } else { 0 }
@@ -202,20 +203,31 @@ pub unsafe extern "C" fn rustino_register_notification_app_id(
     .unwrap_or(0)
 }
 
+/// Application-defined AppUserModelIDs have at most 128 characters and no spaces
+/// (https://learn.microsoft.com/windows/win32/shell/appids). The id also becomes a
+/// registry key name on Windows, so a backslash would nest keys.
+fn is_valid_app_user_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.encode_utf16().count() <= 128
+        && !id.chars().any(|c| c.is_whitespace() || c == '\\')
+}
+
 // Windows silently drops toasts whose AppUserModelID it cannot resolve: it needs a
 // packaged app, a Start Menu shortcut carrying the id, or a registry registration.
 // Unpackaged apps have none of these, so we write the per-user registration that
 // Microsoft's own toolkits use for them (no shortcut, no admin rights needed).
 #[cfg(target_os = "windows")]
 mod windows_notification {
+    use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-        RegCreateKeyExW, RegSetValueExW,
+        RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
     };
     use windows::core::{HSTRING, PCWSTR};
 
     /// Creates (or updates) `HKCU\Software\Classes\AppUserModelId\<app_id>` with the name
-    /// and icon Windows shows in the toast header.
+    /// and icon Windows shows in the toast header. Without an icon, a previously
+    /// registered one is removed so a stale path does not stay attached to the app.
     pub fn register_app_id(app_id: &str, display_name: &str, icon_path: Option<&str>) -> bool {
         let subkey = HSTRING::from(format!(r"Software\Classes\AppUserModelId\{app_id}"));
         let mut key = HKEY::default();
@@ -236,7 +248,10 @@ mod windows_notification {
             return false;
         }
         let ok = set_string(key, "DisplayName", display_name)
-            && icon_path.is_none_or(|icon| set_string(key, "IconUri", icon));
+            && match icon_path {
+                Some(icon) => set_string(key, "IconUri", icon),
+                None => delete_value(key, "IconUri"),
+            };
         unsafe {
             let _ = RegCloseKey(key);
         }
@@ -250,6 +265,11 @@ mod windows_notification {
             .flat_map(u16::to_le_bytes)
             .collect();
         unsafe { RegSetValueExW(key, &HSTRING::from(name), None, REG_SZ, Some(&data)).is_ok() }
+    }
+
+    fn delete_value(key: HKEY, name: &str) -> bool {
+        let result = unsafe { RegDeleteValueW(key, &HSTRING::from(name)) };
+        result.is_ok() || result == ERROR_FILE_NOT_FOUND
     }
 }
 
@@ -1300,5 +1320,26 @@ pub unsafe extern "C" fn rustino_splash_dtor(splash: *mut splash::SplashWindow) 
         unsafe {
             drop(Box::from_raw(splash));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_user_model_id_accepts_documented_form() {
+        assert!(is_valid_app_user_model_id("Ivy.Tendril"));
+        assert!(is_valid_app_user_model_id("Rustino"));
+        assert!(is_valid_app_user_model_id(&"A".repeat(128)));
+    }
+
+    #[test]
+    fn app_user_model_id_rejects_invalid_ids() {
+        assert!(!is_valid_app_user_model_id(""));
+        assert!(!is_valid_app_user_model_id("Ivy Tendril"));
+        assert!(!is_valid_app_user_model_id("Ivy\tTendril"));
+        assert!(!is_valid_app_user_model_id(r"Ivy\Tendril"));
+        assert!(!is_valid_app_user_model_id(&"A".repeat(129)));
     }
 }
