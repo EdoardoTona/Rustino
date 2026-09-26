@@ -11,6 +11,9 @@ var logger = loggerFactory.CreateLogger("Rustino");
 var iconPath = Path.Combine(AppContext.BaseDirectory, "icon.png");
 var menuInitialized = false;
 
+// --- Notifications: Windows drops toasts for an appId that is not registered ---
+RustinoWindow.RegisterNotificationAppId("Rustino", "Rustino", iconPath);
+
 // --- Splashscreen ---
 var splashPath = Path.Combine(AppContext.BaseDirectory, "splash.png");
 using (var splash = new RustinoSplashscreen(splashPath, 400, 400))
