@@ -22,6 +22,13 @@ var window = new RustinoWindow();
 
 // --- Application menu bar ---
 var appMenu = new RustinoMenu()
+    .AddAppMenu(app => app // macOS only
+        .AddPredefinedItem(PredefinedMenuItem.About)
+        .AddSeparator()
+        .AddItem("settings", "Settings…", accelerator: "CmdOrCtrl+,")
+        .AddSeparator()
+        .AddPredefinedItem(PredefinedMenuItem.Hide)
+        .AddPredefinedItem(PredefinedMenuItem.Quit))
     .AddSubmenu("File", file => file
         .AddItem("new", "New", accelerator: "CmdOrCtrl+N")
         .AddItem("open", "Open...", accelerator: "CmdOrCtrl+O")
@@ -278,6 +285,11 @@ window
     .SetLogger(logger)
     .SetTitle("Rustino — Feature Showcase")
     .SetIconFile(iconPath)
+    .SetAboutName("Rustino Showcase")
+    .SetAboutVersion("1.0")
+    .SetAboutCopyright("MIT License")
+    .SetAboutComments("Native desktop windows with embedded web views, powered by Rust.")
+    .SetAboutWebsite("https://github.com/Ivy-Interactive/Rustino")
     .SetUseOsDefaultSize(false)
     .SetSize(1100, 800)
     .SetMinSize(600, 400)

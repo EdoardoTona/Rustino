@@ -34,6 +34,15 @@ public partial class RustinoMenu
         return this;
     }
 
+    // macOS application menu (shown with the app name), replacing the standard one; ignored on Windows/Linux.
+    public RustinoMenu AddAppMenu(Action<RustinoMenu> build)
+    {
+        var sub = new RustinoMenu();
+        build(sub);
+        _items.Add(new MenuItemDef { Type = "app_menu", Items = sub._items });
+        return this;
+    }
+
     public RustinoMenu AddSubmenu(string label, Action<RustinoMenu> build, bool enabled = true)
     {
         var sub = new RustinoMenu();
@@ -87,6 +96,7 @@ public partial class RustinoMenu
 
 public enum PredefinedMenuItem
 {
+    About,
     Undo,
     Redo,
     Cut,

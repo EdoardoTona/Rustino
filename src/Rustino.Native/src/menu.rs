@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use muda::{
-    accelerator::Accelerator, CheckMenuItem, IsMenuItem, Menu, MenuId, MenuItem,
+    accelerator::Accelerator, AboutMetadata, CheckMenuItem, IsMenuItem, Menu, MenuId, MenuItem,
     PredefinedMenuItem, Submenu,
 };
 use serde::Deserialize;
@@ -33,19 +33,38 @@ pub enum MenuItemDef {
         enabled: Option<bool>,
         items: Vec<MenuItemDef>,
     },
+    #[serde(rename = "app_menu")]
+    AppMenu { items: Vec<MenuItemDef> },
 }
 
 pub struct BuiltMenu {
     pub menu: Menu,
+    /// macOS application menu from AddAppMenu (always `None` on other platforms)
+    pub app_menu: Option<Submenu>,
     pub id_map: HashMap<MenuId, String>,
 }
 
-pub fn build_menu(json: &str) -> Option<BuiltMenu> {
+pub fn build_menu(json: &str, about: &AboutMetadata) -> Option<BuiltMenu> {
     let defs: Vec<MenuItemDef> = serde_json::from_str(json).ok()?;
     let menu = Menu::new();
     let mut id_map = HashMap::new();
-    append_items(&|item| menu.append(item), &defs, &mut id_map);
-    Some(BuiltMenu { menu, id_map })
+    let app_menu = defs
+        .iter()
+        .find_map(|def| match def {
+            MenuItemDef::AppMenu { items } if cfg!(target_os = "macos") => Some(items),
+            _ => None,
+        })
+        .map(|items| {
+            let submenu = Submenu::new("App", true);
+            append_items(&|item| submenu.append(item), items, &mut id_map, about);
+            submenu
+        });
+    append_items(&|item| menu.append(item), &defs, &mut id_map, about);
+    Some(BuiltMenu {
+        menu,
+        app_menu,
+        id_map,
+    })
 }
 
 /// Builds top-down: on Windows muda registers an item's accelerator only if its
@@ -54,6 +73,7 @@ fn append_items(
     append: &dyn Fn(&dyn IsMenuItem) -> muda::Result<()>,
     defs: &[MenuItemDef],
     id_map: &mut HashMap<MenuId, String>,
+    about: &AboutMetadata,
 ) {
     for def in defs {
         if let MenuItemDef::Submenu {
@@ -64,8 +84,8 @@ fn append_items(
         {
             let submenu = Submenu::new(label, enabled.unwrap_or(true));
             let _ = append(&submenu);
-            append_items(&|item| submenu.append(item), items, id_map);
-        } else if let Some(item) = build_item(def, id_map) {
+            append_items(&|item| submenu.append(item), items, id_map, about);
+        } else if let Some(item) = build_item(def, id_map, about) {
             let _ = append(item.as_ref());
         }
     }
@@ -74,6 +94,7 @@ fn append_items(
 fn build_item(
     def: &MenuItemDef,
     id_map: &mut HashMap<MenuId, String>,
+    about: &AboutMetadata,
 ) -> Option<Box<dyn IsMenuItem>> {
     match def {
         MenuItemDef::Normal {
@@ -110,6 +131,7 @@ fn build_item(
         MenuItemDef::Predefined { item, label } => {
             let label = label.as_deref();
             let item = match item.as_str() {
+                "about" => PredefinedMenuItem::about(label, Some(about.clone())),
                 "undo" => PredefinedMenuItem::undo(label),
                 "redo" => PredefinedMenuItem::redo(label),
                 "cut" => PredefinedMenuItem::cut(label),
@@ -130,8 +152,8 @@ fn build_item(
             };
             Some(Box::new(item))
         }
-        // Built by append_items
-        MenuItemDef::Submenu { .. } => None,
+        // Built by append_items / build_menu
+        MenuItemDef::Submenu { .. } | MenuItemDef::AppMenu { .. } => None,
     }
 }
 
