@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::ffi::CString;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Once};
 
 use tao::dpi::{PhysicalPosition, PhysicalSize};
@@ -25,6 +25,9 @@ pub struct RustinoWindow {
     pub state: Arc<SharedState>,
     /// Why the window failed to run
     last_error: Mutex<Option<String>>,
+    /// The host's handle and, while `run` runs, the event loop: the last one to let go frees the
+    /// instance, so that the host can destroy it from one of its handlers
+    holders: AtomicUsize,
 }
 
 /// What the exports change, behind one lock: `run` takes the configuration and installs the
@@ -71,7 +74,25 @@ impl RustinoWindow {
             }),
             state,
             last_error: Mutex::new(None),
+            holders: AtomicUsize::new(1),
         }
+    }
+
+    /// The host destroys the instance: a running window closes.
+    pub fn close_for_destroy(&self) {
+        let mut setup = self.setup();
+        match &setup.phase {
+            Phase::Starting => setup.pending.push(RustinoCommand::Close),
+            Phase::Running(proxy) => {
+                let _ = proxy.send_event(RustinoCommand::Close);
+            }
+            Phase::Created | Phase::Exited => {}
+        }
+    }
+
+    /// Lets go of the instance: returns true when the caller must free it.
+    pub fn release(&self) -> bool {
+        self.holders.fetch_sub(1, Ordering::AcqRel) == 1
     }
 
     pub fn set_last_error(&self, message: String) {
@@ -136,7 +157,8 @@ impl RustinoWindow {
         matches!(self.setup().phase, Phase::Running(_))
     }
 
-    /// Takes the configuration for `run`: a window runs once.
+    /// Takes the configuration for `run`: a window runs once. The caller of `run` must `release`
+    /// the instance afterwards.
     pub fn start(&self) -> Result<Started, String> {
         let mut setup = self.setup();
         match setup.phase {
@@ -145,6 +167,8 @@ impl RustinoWindow {
             _ => return Err("The window is already running.".into()),
         }
         setup.phase = Phase::Starting;
+        // Released by the caller of `run`
+        self.holders.fetch_add(1, Ordering::AcqRel);
         Ok(Started {
             config: std::mem::take(&mut setup.config),
             callbacks: setup.callbacks,
@@ -1523,6 +1547,22 @@ mod tests {
         assert_eq!(setup.config.title, "", "taken by run");
         drop(setup);
         assert!(window.start().is_err(), "a window runs once");
+    }
+
+    #[test]
+    fn destroying_a_running_window_closes_it_and_waits_for_run() {
+        use super::RustinoWindow;
+        use crate::commands::RustinoCommand;
+        let window = RustinoWindow::new(crate::config::WindowConfig::default());
+        let _started = window.start().unwrap();
+        window.close_for_destroy();
+        assert!(!window.release(), "run still uses it");
+        assert!(matches!(window.setup().pending.last(), Some(RustinoCommand::Close)));
+        assert!(window.release(), "run is done: free it");
+
+        let idle = RustinoWindow::new(crate::config::WindowConfig::default());
+        idle.close_for_destroy();
+        assert!(idle.release(), "never ran");
     }
 
     #[test]

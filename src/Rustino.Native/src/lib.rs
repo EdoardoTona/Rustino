@@ -45,37 +45,47 @@ pub unsafe extern "C" fn rustino_ctor(params: *const RustinoInitParams) -> *mut 
     .unwrap_or(std::ptr::null_mut())
 }
 
+/// Frees the window. A running window (e.g. destroyed from one of its handlers) closes, and is
+/// freed when `rustino_wait_for_exit` returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_dtor(instance: *mut RustinoWindow) {
-    let _ = catch_unwind(|| {
-        if !instance.is_null() {
-            unsafe {
-                drop(Box::from_raw(instance));
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(inst) = unsafe { instance.as_ref() } {
+            inst.close_for_destroy();
+            if inst.release() {
+                unsafe { drop(Box::from_raw(instance)) };
             }
         }
-    });
+    }));
 }
 
 /// Runs the window until it closes. Returns 0 when it closed, 1 when it failed: the window or the
 /// webview couldn't be created, it already ran, or the native code panicked.
-/// `rustino_get_last_error` tells why.
+/// `rustino_get_last_error` tells why. When the host destroyed the window meanwhile, it's freed
+/// before returning.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_wait_for_exit(instance: *mut RustinoWindow) -> i32 {
     let Some(inst) = (unsafe { instance.as_ref() }) else {
         return 1;
     };
+    let mut ran = false;
     let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
         let started = inst.start()?;
+        ran = true;
         inst.run(started)
     }))
     .unwrap_or_else(|panic| Err(panic_message(panic.as_ref())));
-    match result {
+    let status = match result {
         Ok(()) => 0,
         Err(message) => {
             inst.set_last_error(message);
             1
         }
+    };
+    if ran && inst.release() {
+        unsafe { drop(Box::from_raw(instance)) };
     }
+    status
 }
 
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
@@ -1640,6 +1650,9 @@ mod tests {
             let error = rustino_get_last_error(instance);
             assert_eq!(std::ffi::CStr::from_ptr(error).to_str().unwrap(), "The window is already running.");
             rustino_free_string(error);
+            // Destroyed while it runs: freed by the first run, once done
+            rustino_dtor(instance);
+            assert!(instance.as_ref().unwrap().release());
             drop(Box::from_raw(instance));
         }
     }
