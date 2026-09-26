@@ -399,7 +399,7 @@ The platform limits below hold both before the window runs and while it runs.
 | `SetClosable(bool)` / `SetMinimizable(bool)` / `SetMaximizable(bool)` | Enable the title bar buttons. Linux: only `SetClosable`, as a request the window manager may ignore; minimize and maximize can't be disabled |
 | `SetAlwaysOnBottom(bool)` | Keeps the window below the others, replacing `SetTopMost`. Linux: a request to the window manager, not supported on Wayland |
 | `SetIgnoreCursorEvents(bool)` | Mouse clicks go through the window, for overlays |
-| `SetMacTitleBarStyle(MacTitleBarStyle)` | macOS, pre-run: `Default`, `Transparent` or `Overlay` (no title, the page under the traffic lights, like Slack or VS Code) |
+| `SetMacTitleBarStyle(MacTitleBarStyle)` | macOS: `Default`, `Transparent` or `Overlay` (no title, the page under the traffic lights, like Slack or VS Code). `SetChromeless(false)` brings the style back |
 | `SetMacTrafficLightPosition(double, double)` | macOS: position of the traffic lights, in logical pixels |
 | `SetDesktopFileName(string)` | Linux: `.desktop` file of the app, for the dock badge and progress |
 | `SetDragRegionsEnabled(bool)` | Pre-run: drag regions and edge resizing from the page (on by default, see below) |

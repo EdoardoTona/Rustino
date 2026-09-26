@@ -196,8 +196,8 @@ void HandleMessage(string msg)
         case "restore": window.Restore(); break;
         case "fullscreen": window.SetFullscreen(true); break;
         case "exit-fullscreen": window.SetFullscreen(false); break;
-        case "chromeless": window.SetChromeless(true); break;
-        case "decorated": window.SetChromeless(false); break;
+        case "chromeless": SetTitleBar("Chromeless"); break;
+        case "decorated": SetTitleBar(OperatingSystem.IsMacOS() ? "Overlay" : "Default"); break;
         case "topmost-on": window.SetTopMost(true); break;
         case "topmost-off": window.SetTopMost(false); break;
         case "zoom-in": window.SetZoom(1.5); break;
@@ -377,6 +377,7 @@ void HandleNativeMessage(string msg)
             window.SetIgnoreCursorEvents(true);
             Task.Delay(5000).ContinueWith(_ => window.SetIgnoreCursorEvents(false));
             break;
+        case "titlebar": SetTitleBar(parts[1]); break;
         case "shadow": window.SetShadow(on); break;
         case "skip-taskbar": window.SetSkipTaskbar(on); break;
         case "content-protection": window.SetContentProtection(on); break;
@@ -389,6 +390,18 @@ void HandleNativeMessage(string msg)
             Log($"Theme: {window.Theme}, scale factor: {window.ScaleFactor}");
             break;
     }
+}
+
+// Chromeless, or decorated with a MacTitleBarStyle (only macOS tells Default and Overlay apart)
+void SetTitleBar(string mode)
+{
+    var chromeless = mode == "Chromeless";
+    window.SetChromeless(chromeless);
+    if (!chromeless)
+        window.SetMacTitleBarStyle(Enum.Parse<MacTitleBarStyle>(mode));
+    // Room for the traffic lights only when the page is under them
+    var inset = OperatingSystem.IsMacOS() && mode == "Overlay" ? "80px" : "8px";
+    window.ExecuteScript($"document.documentElement.style.setProperty('--titlebar-inset', '{inset}')");
 }
 
 void Log(string text)
@@ -774,11 +787,12 @@ static string Html() => """
           </div>
         </div>
         <div class="card">
-          <h3>Chromeless Windows</h3>
-          <p style="color:#888;font-size:0.82rem;margin-bottom:8px">Make the window chromeless from the Window tab: the empty part of the tab bar (data-rustino-drag-region) moves it, a double click maximizes it and the edges resize it.</p>
+          <h3>Title Bar</h3>
+          <p style="color:#888;font-size:0.82rem;margin-bottom:8px">Chromeless or with the overlay title bar, the empty part of the tab bar (data-rustino-drag-region) moves the window and a double click maximizes it; chromeless windows resize from the edges.</p>
           <div class="row">
-            <button class="y" onclick="send('chromeless')">Chromeless</button>
-            <button class="y" onclick="send('decorated')">Decorated</button>
+            <button class="y" onclick="send('native:titlebar:Overlay')">Overlay Title Bar (macOS)</button>
+            <button class="y" onclick="send('native:titlebar:Default')">Standard Title Bar</button>
+            <button class="y" onclick="send('native:titlebar:Chromeless')">Chromeless</button>
             <label class="flag"><input type="checkbox" checked onchange="flag('shadow', this)"> Shadow</label>
           </div>
         </div>

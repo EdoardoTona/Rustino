@@ -199,11 +199,13 @@ public partial class RustinoWindow
         return this;
     }
 
-    /// <summary>macOS title bar style. Must be called before <see cref="WaitForClose"/>.</summary>
+    /// <summary>
+    /// macOS title bar style, also while the window runs. A chromeless window gets it back with
+    /// <c>SetChromeless(false)</c>.
+    /// </summary>
     public RustinoWindow SetMacTitleBarStyle(MacTitleBarStyle style)
     {
         _macTitleBarStyle = style;
-        // Load() creates the native window before WaitForClose builds it
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_mac_title_bar_style(_nativeHandle, (int)style);
         return this;

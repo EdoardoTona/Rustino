@@ -177,6 +177,7 @@ pub enum WindowCommand {
     SetMaximizable(bool),
     SetAlwaysOnBottom(bool),
     SetIgnoreCursorEvents(bool),
+    SetMacTitleBarStyle(MacTitleBarStyle),
     SetTrafficLightPosition(f64, f64),
     SetDesktopFileName(Option<String>),
     DragWindow,
@@ -292,6 +293,12 @@ impl WindowExt {
             maximizable: self.options.maximizable,
             resize_border: None,
             resize_border_dirty: false,
+            #[cfg(target_os = "macos")]
+            mac_title_bar: MacTitleBar {
+                style: self.options.mac_title_bar_style,
+                traffic_lights: self.options.traffic_light_position,
+                pending: false,
+            },
             #[cfg(target_os = "linux")]
             _theme_watch: GtkThemeWatch::new(proxy),
         }
@@ -334,6 +341,8 @@ pub struct WindowExtRuntime {
     resize_border: Option<u32>,
     /// The window state changed: check the resize border once the pending events are handled
     resize_border_dirty: bool,
+    #[cfg(target_os = "macos")]
+    mac_title_bar: MacTitleBar,
     #[cfg(target_os = "linux")]
     _theme_watch: Option<GtkThemeWatch>,
 }
@@ -348,6 +357,8 @@ impl WindowExtRuntime {
         window: &Window,
         webview: &wry::WebView,
     ) -> Option<Event<'a, RustinoCommand>> {
+        #[cfg(target_os = "macos")]
+        self.mac_title_bar.follow(&event, window);
         match event {
             Event::UserEvent(RustinoCommand::Window(command)) => {
                 self.dispatch(command, target, window, webview);
@@ -462,11 +473,17 @@ impl WindowExtRuntime {
                 let _ = window.set_ignore_cursor_events(ignore);
             }
             #[allow(unused_variables)]
+            WindowCommand::SetMacTitleBarStyle(style) => {
+                #[cfg(target_os = "macos")]
+                self.mac_title_bar.set_style(style, window);
+            }
+            #[allow(unused_variables)]
             WindowCommand::SetTrafficLightPosition(x, y) => {
                 #[cfg(target_os = "macos")]
                 {
                     use tao::platform::macos::WindowExtMacOS;
                     window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
+                    self.mac_title_bar.traffic_lights = Some((x, y));
                 }
             }
             #[allow(unused_variables)]
@@ -510,6 +527,60 @@ impl WindowExtRuntime {
             let _ = webview.evaluate_script(&format!(
                 "window.__rustino_window && window.__rustino_window.setResizeBorder({border})"
             ));
+        }
+    }
+}
+
+/// The title bar style while the window runs.
+#[cfg(target_os = "macos")]
+struct MacTitleBar {
+    style: MacTitleBarStyle,
+    traffic_lights: Option<(f64, f64)>,
+    /// The decorations are coming back: tao rebuilds the style mask asynchronously, without the
+    /// style, which goes back on the resize that follows
+    pending: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl MacTitleBar {
+    /// Called before `dispatch_command` runs the event.
+    fn follow(&mut self, event: &Event<RustinoCommand>, window: &Window) {
+        match event {
+            Event::UserEvent(RustinoCommand::SetDecorations(true)) if !window.is_decorated() => {
+                self.pending = true;
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
+                ..
+            } if self.pending => {
+                self.pending = false;
+                self.apply(window);
+            }
+            _ => {}
+        }
+    }
+
+    fn set_style(&mut self, style: MacTitleBarStyle, window: &Window) {
+        self.style = style;
+        // Chromeless windows get the style with their decorations
+        if window.is_decorated() && !self.pending {
+            self.apply(window);
+        }
+    }
+
+    fn apply(&self, window: &Window) {
+        use tao::platform::macos::WindowExtMacOS;
+        let overlay = self.style == MacTitleBarStyle::Overlay;
+        window.set_titlebar_transparent(self.style != MacTitleBarStyle::Default);
+        window.set_fullsize_content_view(overlay);
+        // tao hides the title only in the builder. 0 visible, 1 hidden (NSWindowTitleVisibility)
+        let ns_window = window.ns_window() as *mut objc2::runtime::AnyObject;
+        let visibility: isize = if overlay { 1 } else { 0 };
+        unsafe {
+            let _: () = objc2::msg_send![ns_window, setTitleVisibility: visibility];
+        }
+        if let Some((x, y)) = self.traffic_lights {
+            window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
         }
     }
 }
