@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::ffi::CString;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Once, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, Once};
 
 use tao::dpi::{PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
@@ -21,39 +21,148 @@ use crate::menu;
 use crate::state::SharedState;
 
 pub struct RustinoWindow {
-    pub config: WindowConfig,
-    pub callbacks: RustinoCallbacks,
-    pub proxy: RwLock<Option<EventLoopProxy<RustinoCommand>>>,
+    setup: Mutex<Setup>,
     pub state: Arc<SharedState>,
+}
+
+/// What the exports change, behind one lock: `run` takes the configuration and installs the
+/// event loop atomically, so that a setter either changes the configuration or sends a command.
+pub struct Setup {
+    pub config: WindowConfig,
+    /// Taken by `run`: handlers set afterwards are ignored
+    pub callbacks: RustinoCallbacks,
     pub ext: crate::window_ext::WindowExt,
     pub webview_ext: crate::webview_ext::WebViewExt,
+    phase: Phase,
+    /// Commands sent before the window exists, which its event loop gets first
+    pending: Vec<RustinoCommand>,
+}
+
+enum Phase {
+    /// The configuration can change
+    Created,
+    /// `run` builds the window and the webview
+    Starting,
+    Running(EventLoopProxy<RustinoCommand>),
+    Exited,
+}
+
+/// What `run` takes from the setup.
+pub struct Started {
+    config: WindowConfig,
+    callbacks: RustinoCallbacks,
+    ext: crate::window_ext::WindowExt,
+    webview_ext: crate::webview_ext::WebViewExt,
 }
 
 impl RustinoWindow {
     pub fn new(config: WindowConfig) -> Self {
         let state = Arc::new(SharedState::new(config.width, config.height));
         Self {
-            config,
-            callbacks: RustinoCallbacks::default(),
-            proxy: RwLock::new(None),
+            setup: Mutex::new(Setup {
+                config,
+                callbacks: RustinoCallbacks::default(),
+                ext: Default::default(),
+                webview_ext: Default::default(),
+                phase: Phase::Created,
+                pending: Vec::new(),
+            }),
             state,
-            ext: Default::default(),
-            webview_ext: Default::default(),
         }
     }
 
+    fn setup(&self) -> MutexGuard<'_, Setup> {
+        self.setup.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Changes the configuration before the window runs. Returns false once it started.
+    pub fn configure(&self, store: impl FnOnce(&mut Setup)) -> bool {
+        let mut setup = self.setup();
+        let created = matches!(setup.phase, Phase::Created);
+        if created {
+            store(&mut setup);
+        }
+        created
+    }
+
+    /// A setting of the window: before it runs `store` changes the configuration, then `cmd`
+    /// changes the window.
+    pub fn set(&self, cmd: RustinoCommand, store: impl FnOnce(&mut Setup)) {
+        let mut setup = self.setup();
+        match &setup.phase {
+            Phase::Created => store(&mut setup),
+            Phase::Starting => setup.pending.push(cmd),
+            Phase::Running(proxy) => {
+                let _ = proxy.send_event(cmd);
+            }
+            Phase::Exited => {}
+        }
+    }
+
+    /// Sends a command to the window; before it runs, the window gets it once it exists.
+    /// Returns false once the window closed.
     pub fn send_command(&self, cmd: RustinoCommand) -> bool {
-        if let Ok(guard) = self.proxy.read()
-            && let Some(proxy) = guard.as_ref()
-        {
-            return proxy.send_event(cmd).is_ok();
+        let mut setup = self.setup();
+        match &setup.phase {
+            Phase::Created | Phase::Starting => {
+                setup.pending.push(cmd);
+                true
+            }
+            Phase::Running(proxy) => proxy.send_event(cmd).is_ok(),
+            Phase::Exited => false,
         }
-        false
     }
 
-    pub fn run(&mut self) {
-        let mut config = std::mem::take(&mut self.config);
-        let callbacks = self.callbacks;
+    /// Sends a command to the running window only.
+    pub fn send_to_running(&self, cmd: RustinoCommand) -> bool {
+        match &self.setup().phase {
+            Phase::Running(proxy) => proxy.send_event(cmd).is_ok(),
+            _ => false,
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.setup().phase, Phase::Running(_))
+    }
+
+    /// Takes the configuration for `run`: a window runs once.
+    pub fn start(&self) -> Result<Started, String> {
+        let mut setup = self.setup();
+        match setup.phase {
+            Phase::Created => {}
+            Phase::Exited => return Err("The window already ran: create a new one.".into()),
+            _ => return Err("The window is already running.".into()),
+        }
+        setup.phase = Phase::Starting;
+        Ok(Started {
+            config: std::mem::take(&mut setup.config),
+            callbacks: setup.callbacks,
+            ext: std::mem::take(&mut setup.ext),
+            webview_ext: std::mem::take(&mut setup.webview_ext),
+        })
+    }
+
+    /// Runs the window on this thread until it closes.
+    pub fn run(&self, started: Started) -> Result<(), String> {
+        // Whatever happens, the window no longer runs afterwards
+        struct Exit<'a>(&'a RustinoWindow);
+        impl Drop for Exit<'_> {
+            fn drop(&mut self) {
+                let mut setup = self.0.setup();
+                setup.phase = Phase::Exited;
+                let pending = std::mem::take(&mut setup.pending);
+                drop(setup);
+                drop(pending);
+            }
+        }
+        let _exit = Exit(self);
+
+        let Started {
+            mut config,
+            callbacks,
+            ext,
+            webview_ext,
+        } = started;
 
         warn_unsupported_settings(&config);
 
@@ -63,7 +172,6 @@ impl RustinoWindow {
             .with_any_thread(true)
             .with_msg_hook(|msg| crate::accelerators::translate(unsafe { &*msg.cast() }));
         let mut event_loop = builder.build();
-        *self.proxy.write().unwrap() = Some(event_loop.create_proxy());
 
         // --- Build window ---
         let mut window_builder = WindowBuilder::new()
@@ -101,12 +209,11 @@ impl RustinoWindow {
             window_builder = window_builder.with_background_color(color);
         }
 
-        let ext = std::mem::take(&mut self.ext);
         window_builder = ext.configure_window(window_builder);
 
         let window = window_builder
             .build(&event_loop)
-            .expect("failed to build window");
+            .map_err(|e| format!("Failed to create the window: {e}"))?;
 
         if config.center {
             center_window(&window);
@@ -166,7 +273,7 @@ impl RustinoWindow {
         webview_builder = ext.configure_webview(webview_builder);
         let ipc_filter = ext.ipc_filter(event_loop.create_proxy());
         let print_filter = crate::webview_ext::PrintFilter::new(event_loop.create_proxy());
-        webview_builder = std::mem::take(&mut self.webview_ext).configure(
+        webview_builder = webview_ext.configure(
             webview_builder,
             callbacks.context,
             &self.state,
@@ -248,11 +355,12 @@ impl RustinoWindow {
         let webview = {
             use tao::platform::unix::WindowExtUnix;
             use wry::WebViewBuilderExtUnix;
-            webview_builder.build_gtk(window.default_vbox().expect("tao window without GTK box"))
+            let vbox = window.default_vbox().ok_or("Failed to create the webview: the window has no GTK box")?;
+            webview_builder.build_gtk(vbox)
         };
         #[cfg(not(target_os = "linux"))]
         let webview = webview_builder.build(&window);
-        let webview = webview.expect("failed to build webview");
+        let webview = webview.map_err(|e| format!("Failed to create the webview: {e}"))?;
 
         #[cfg(target_os = "windows")]
         {
@@ -292,7 +400,7 @@ impl RustinoWindow {
         let state = Arc::clone(&self.state);
 
         // Menu and tray events reach this window through its event loop
-        let event_loop_key = register_event_loop(event_loop.create_proxy());
+        let _event_loop_registration = register_event_loop(event_loop.create_proxy());
 
         let mut menu_items = menu::MenuItems::default();
         let mut current_menu: Option<muda::Menu> = None;
@@ -305,6 +413,16 @@ impl RustinoWindow {
         }
 
         let mut tray: Option<Tray> = None;
+
+        // The commands sent until now come first, in order
+        {
+            let mut setup = self.setup();
+            let proxy = event_loop.create_proxy();
+            for cmd in setup.pending.drain(..) {
+                let _ = proxy.send_event(cmd);
+            }
+            setup.phase = Phase::Running(proxy);
+        }
 
         event_loop.run_return(move |event, target, control_flow| {
             if *control_flow != ControlFlow::Exit {
@@ -387,18 +505,15 @@ impl RustinoWindow {
         });
 
         drop(running);
-        unregister_event_loop(event_loop_key);
-        #[cfg(target_os = "windows")]
-        crate::accelerators::set_menu(0, None, 0);
-        *self.proxy.write().unwrap() = None;
+        Ok(())
     }
 }
 
 /// Event loops of the running windows, which receive the menu and tray events.
 static EVENT_LOOPS: Mutex<Vec<(u64, EventLoopProxy<RustinoCommand>)>> = Mutex::new(Vec::new());
 
-/// Returns the key for `unregister_event_loop`.
-fn register_event_loop(proxy: EventLoopProxy<RustinoCommand>) -> u64 {
+/// The event loop stays registered until the returned value is dropped.
+fn register_event_loop(proxy: EventLoopProxy<RustinoCommand>) -> EventLoopRegistration {
     static NEXT_KEY: AtomicU64 = AtomicU64::new(0);
     static INSTALL_HANDLERS: Once = Once::new();
     // muda and tray-icon keep the first event handler for the whole process: it forwards the
@@ -431,12 +546,18 @@ fn register_event_loop(proxy: EventLoopProxy<RustinoCommand>) -> u64 {
     if let Ok(mut loops) = EVENT_LOOPS.lock() {
         loops.push((key, proxy));
     }
-    key
+    EventLoopRegistration(key)
 }
 
-fn unregister_event_loop(key: u64) {
-    if let Ok(mut loops) = EVENT_LOOPS.lock() {
-        loops.retain(|(k, _)| *k != key);
+struct EventLoopRegistration(u64);
+
+impl Drop for EventLoopRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut loops) = EVENT_LOOPS.lock() {
+            loops.retain(|(k, _)| *k != self.0);
+        }
+        #[cfg(target_os = "windows")]
+        crate::accelerators::set_menu(0, None, 0);
     }
 }
 
@@ -1364,6 +1485,32 @@ mod tests {
         let resp = handle_custom_scheme("app://localhost/missing".to_string(), std::ptr::null_mut(), no_response_cb);
         assert_eq!(resp.status(), 404);
         assert!(resp.body().is_empty());
+    }
+
+    #[test]
+    fn settings_go_to_the_configuration_until_the_window_starts() {
+        use super::{Phase, RustinoWindow};
+        use crate::commands::RustinoCommand;
+        let window = RustinoWindow::new(crate::config::WindowConfig::default());
+        assert!(window.configure(|s| s.config.user_agent = Some("agent".into())));
+        window.set(RustinoCommand::SetTitle("a".into()), |s| s.config.title = "a".into());
+        assert!(window.send_command(RustinoCommand::EvaluateScript("1".into())), "queued");
+        assert!(!window.is_running());
+
+        let started = window.start().unwrap();
+        assert_eq!(started.config.user_agent.as_deref(), Some("agent"));
+        assert_eq!(started.config.title, "a");
+        assert!(!window.configure(|s| s.config.user_agent = None), "the window started");
+        window.set(RustinoCommand::SetTitle("b".into()), |s| s.config.title = "b".into());
+        let setup = window.setup();
+        assert!(matches!(setup.phase, Phase::Starting));
+        assert!(matches!(
+            setup.pending.as_slice(),
+            [RustinoCommand::EvaluateScript(_), RustinoCommand::SetTitle(title)] if title == "b"
+        ));
+        assert_eq!(setup.config.title, "", "taken by run");
+        drop(setup);
+        assert!(window.start().is_err(), "a window runs once");
     }
 
     #[test]

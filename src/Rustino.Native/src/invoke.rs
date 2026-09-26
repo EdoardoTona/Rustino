@@ -107,10 +107,6 @@ impl RustinoWindow {
         })
     }
 
-    pub fn is_running(&self) -> bool {
-        self.proxy.read().is_ok_and(|proxy| proxy.is_some())
-    }
-
     /// Runs `task` on the event loop thread and returns its result, waiting for it when called
     /// from another thread. `None` when the window doesn't run or closes first.
     pub fn invoke<R: Send + 'static>(
@@ -121,15 +117,16 @@ impl RustinoWindow {
             return Some(task(&window, &webview));
         }
         let (tx, rx) = mpsc::channel();
-        let sent = self.send_command(RustinoCommand::Invoke(Task::new(move |window, webview| {
+        // Not queued before the window runs: it might never run
+        let sent = self.send_to_running(RustinoCommand::Invoke(Task::new(move |window, webview| {
             let _ = tx.send(task(window, webview));
         })));
         // A closing window drops the task, and with it the sender
         if sent { rx.recv().ok() } else { None }
     }
 
-    /// Runs `task` on the event loop thread without waiting for it. Returns false when the
-    /// window doesn't run.
+    /// Runs `task` on the event loop thread without waiting for it, once the window runs.
+    /// Returns false when it closed.
     pub fn post(&self, task: impl FnOnce(&Window, &WebView) + Send + 'static) -> bool {
         match self.running_here() {
             Some((window, webview)) => {
