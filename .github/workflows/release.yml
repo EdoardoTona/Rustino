@@ -153,6 +153,11 @@ jobs:
             --output ./nupkg \
             /p:Version=${{ steps.version.outputs.version }}
 
+          dotnet pack Rustino.Blazor/Rustino.Blazor.csproj \
+            --configuration Release \
+            --output ./nupkg \
+            /p:Version=${{ steps.version.outputs.version }}
+
           echo "Packed NuGet packages:"
           ls -la ./nupkg/
 
@@ -217,3 +222,4 @@ jobs:
           echo "**Packages:**" >> $GITHUB_STEP_SUMMARY
           echo "- [Rustino.NET](https://www.nuget.org/packages/Rustino.NET)" >> $GITHUB_STEP_SUMMARY
           echo "- [Rustino.NET.Reactive](https://www.nuget.org/packages/Rustino.NET.Reactive)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Rustino.Blazor](https://www.nuget.org/packages/Rustino.Blazor)" >> $GITHUB_STEP_SUMMARY

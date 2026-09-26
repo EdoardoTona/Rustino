@@ -49,6 +49,16 @@ The API is identical. Change two things:
 
 All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the same.
 
+For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid-rustinoblazor):
+
+```diff
+- using Photino.Blazor;
++ using Rustino.Blazor;
+
+- var builder = PhotinoBlazorAppBuilder.CreateDefault(args);
++ var builder = RustinoBlazorAppBuilder.CreateDefault(args);
+```
+
 ## API Reference
 
 ### Configuration (pre-run)
@@ -345,6 +355,49 @@ window.WhenFocusChangedDistinct()
     .Subscribe(focused => Console.WriteLine($"Focus: {focused}"));
 ```
 
+## Blazor Hybrid (Rustino.Blazor)
+
+The `Rustino.Blazor` package hosts Razor components in a Rustino window, like Photino.Blazor. Components run in .NET and render into the native webview; the app is served from `app://localhost/`.
+
+```csharp
+using Rustino.Blazor;
+
+var builder = RustinoBlazorAppBuilder.CreateDefault(args);
+builder.Services.AddSingleton<MyService>();   // regular dependency injection
+builder.RootComponents.Add<App>("#app");
+
+var app = builder.Build();
+app.MainWindow.SetTitle("My Blazor App");     // the underlying RustinoWindow
+app.Run();
+```
+
+Use the `Microsoft.NET.Sdk.Razor` SDK and put a host page in `wwwroot/index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <base href="/" />
+</head>
+<body>
+    <div id="app">Loading…</div>
+    <script src="_framework/blazor.webview.js"></script>
+</body>
+</html>
+```
+
+Inside components:
+
+- `@inject RustinoWindow Window` gives access to the whole native API (dialogs, notifications, menus, window state, …).
+- Native events (`SizeChanged`, `MenuItemClicked`, …) are raised outside Blazor's dispatcher: update state with `InvokeAsync(StateHasChanged)`.
+- `IJSRuntime` and `[JSInvokable]` work as in any Blazor app.
+- `@inject HttpClient Http` reads app files (e.g. `Http.GetStringAsync("data.json")`; missing files are `404 Not Found`) and forwards other requests to the network.
+- Only the app's own pages (`app://localhost/`) can talk to the components: messages from other sites the webview navigates to, or from frames of other origins embedded in the app, are ignored.
+
+Static files come from `wwwroot` next to the executable (published apps) or from the project during development. Pass an `IFileProvider` to `CreateDefault` to serve them from somewhere else (e.g. embedded resources).
+
+See [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor) for a complete example.
+
 ## Building from Source
 
 ### Prerequisites
@@ -367,7 +420,11 @@ cd ../Rustino.NET
 dotnet build
 
 # Run a sample
-cd ../Rustino.Samples/Rustino.Samples.HelloWorld
+cd ../Rustino.Samples
+dotnet run
+
+# Run the Blazor sample
+cd ../Rustino.Samples.Blazor
 dotnet run
 ```
 

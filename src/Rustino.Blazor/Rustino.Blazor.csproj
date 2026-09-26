@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Rustino.Blazor</PackageId>
+    <Description>Blazor Hybrid for Rustino.NET: host Razor components in a native Rustino window. Drop-in replacement for Photino.Blazor.</Description>
+    <Authors>Ivy Interactive</Authors>
+    <Company>Ivy Interactive</Company>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/Ivy-Interactive/Rustino</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Ivy-Interactive/Rustino</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Rustino.NET/Rustino.NET.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>
