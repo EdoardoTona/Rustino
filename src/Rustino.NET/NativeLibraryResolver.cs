@@ -58,12 +58,8 @@ internal static class NativeLibraryResolver
 
     private static string GetRuntimeIdentifier()
     {
-        var arch = RuntimeInformation.OSArchitecture switch
-        {
-            Architecture.X64 => "x64",
-            Architecture.Arm64 => "arm64",
-            _ => "x64"
-        };
+        // The process, not the OS: x64 apps run emulated on arm64 Windows and macOS (Rosetta)
+        var arch = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return $"win-{arch}";
