@@ -1093,17 +1093,15 @@ pub unsafe extern "C" fn rustino_set_ignore_cursor_events(instance: *mut Rustino
     };
 }
 
-/// Pre-run only, ignored once the window runs. 0 default, 1 transparent, 2 overlay (see
-/// `MacTitleBarStyle`)
+/// 0 default, 1 transparent, 2 overlay (see `MacTitleBarStyle`)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_mac_title_bar_style(instance: *mut RustinoWindow, style: i32) {
-    let _ = catch_unwind(|| {
-        if let Some(inst) = unsafe { instance.as_mut() }
-            && inst.proxy.read().is_ok_and(|proxy| proxy.is_none())
-        {
-            inst.ext.options.mac_title_bar_style = window_ext::MacTitleBarStyle::from_i32(style);
-        }
-    });
+    let style = window_ext::MacTitleBarStyle::from_i32(style);
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetMacTitleBarStyle(style), |o| {
+            o.mac_title_bar_style = style
+        })
+    };
 }
 
 /// Pre-run only, ignored once the window runs. Without drag regions no page can move, resize or
