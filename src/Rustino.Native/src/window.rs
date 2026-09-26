@@ -903,16 +903,19 @@ fn attach_menu_to_window(menu: &muda::Menu, _custom_edit_shortcuts: u8, _window:
     {
         use gtk::prelude::*;
         use tao::platform::unix::WindowExtUnix;
-        let _ = menu.init_for_gtk_window(_window.gtk_window(), _window.default_vbox());
         // The GTK theme draws the menu bar transparent, so a background color set on the window
         // (e.g. a dark one) shows through while the labels keep the theme's text color: on a
         // light theme that is dark text over a dark background. Give the bar the theme's own
         // background so background and text stay readable and consistent with the title bar.
-        if let Some(menu_bar) = _window.default_vbox().and_then(|vbox| {
-            vbox.children()
-                .into_iter()
-                .find_map(|child| child.downcast::<gtk::MenuBar>().ok())
-        }) {
+        // Applied regardless of the window background: with most themes it changes nothing,
+        // but it makes the bar opaque on a transparent window.
+        // Only on success: a failed init would leave no bar of this menu to style. The method
+        // takes the menu by value, and cloning a muda::Menu only clones its handle.
+        let menu_bar = menu
+            .init_for_gtk_window(_window.gtk_window(), _window.default_vbox())
+            .ok()
+            .and_then(|_| menu.clone().gtk_menubar_for_gtk_window(_window.gtk_window()));
+        if let Some(menu_bar) = menu_bar {
             let provider = gtk::CssProvider::new();
             let _ = provider.load_from_data(
                 b"menubar { background-color: @theme_bg_color; color: @theme_fg_color; }",
