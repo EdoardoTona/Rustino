@@ -212,7 +212,7 @@ impl RustinoWindow {
         self.state.store_position(pos.x, pos.y);
         self.state
             .is_maximized
-            .store(query_maximized(&window).unwrap_or(config.maximized), Ordering::Release);
+            .store(window.is_maximized(), Ordering::Release);
         self.state
             .is_fullscreen
             .store(config.fullscreen, Ordering::Release);
@@ -296,9 +296,9 @@ impl RustinoWindow {
                         }
                         WindowEvent::Resized(size) => {
                             state.store_size(size.width, size.height);
-                            if let Some(maximized) = query_maximized(&window) {
-                                state.is_maximized.store(maximized, Ordering::Release);
-                            }
+                            state
+                                .is_maximized
+                                .store(window.is_maximized(), Ordering::Release);
                             if let Some(cb) = callbacks.on_resized {
                                 unsafe {
                                     cb(callbacks.context, size.width as i32, size.height as i32)
@@ -404,16 +404,6 @@ fn center_window(window: &tao::window::Window) {
         let y = monitor_pos.y + ((monitor_size.height as i32 - window_size.height as i32) / 2);
         window.set_outer_position(PhysicalPosition::new(x, y));
     }
-}
-
-/// On macOS, tao's `is_maximized()` briefly makes borderless or non-resizable windows titled and
-/// resizable: the frame change fires `Resized` again, looping forever. Returns `None` in that case
-/// so the last known state (set by `SetMaximized`) is kept.
-fn query_maximized(window: &tao::window::Window) -> Option<bool> {
-    if cfg!(target_os = "macos") && !(window.is_decorated() && window.is_resizable()) {
-        return None;
-    }
-    Some(window.is_maximized())
 }
 
 fn update_monitor_cache(window: &tao::window::Window, state: &SharedState) {
