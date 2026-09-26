@@ -1202,16 +1202,31 @@ pub(crate) fn handle_new_window_req(
 }
 
 /// WebView2 serves custom schemes as `http://<scheme>.localhost/`: maps these URLs back to
-/// `<scheme>://localhost/`, the form custom scheme handlers receive.
+/// `<scheme>://localhost/`, the form custom scheme handlers receive. Only the exact host
+/// `<scheme>.localhost` (with an optional port) maps: `http://app.evil.com/` stays as it is.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn revert_custom_scheme_workaround(url: &str, schemes: &[String]) -> String {
-    schemes
-        .iter()
-        .find_map(|scheme| {
-            url.strip_prefix(&format!("http://{scheme}."))
-                .map(|rest| format!("{scheme}://{rest}"))
-        })
-        .unwrap_or_else(|| url.to_string())
+    let Some(rest) = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")) else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(authority_end);
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => (host, Some(port)),
+        Some(_) => return url.to_string(),
+        None => (authority, None),
+    };
+    let host = host.to_ascii_lowercase();
+    let Some(scheme) = host
+        .strip_suffix(".localhost")
+        .and_then(|name| schemes.iter().find(|scheme| scheme.eq_ignore_ascii_case(name)))
+    else {
+        return url.to_string();
+    };
+    match port {
+        Some(port) => format!("{scheme}://localhost:{port}{path}"),
+        None => format!("{scheme}://localhost{path}"),
+    }
 }
 
 /// Filled by the host (via `rustino_set_scheme_response`) while the custom scheme callback runs.
@@ -1304,13 +1319,38 @@ mod tests {
     #[test]
     fn test_revert_custom_scheme_workaround() {
         let schemes = vec!["app".to_string()];
-        assert_eq!(revert_custom_scheme_workaround("http://app.localhost/counter", &schemes), "app://localhost/counter");
-        assert_eq!(revert_custom_scheme_workaround("https://example.com/", &schemes), "https://example.com/");
-        assert_eq!(
-            revert_custom_scheme_workaround("https://example.com/?u=http://app.localhost/", &schemes),
-            "https://example.com/?u=http://app.localhost/"
-        );
+        let revert = |url: &str| revert_custom_scheme_workaround(url, &schemes);
+        assert_eq!(revert("http://app.localhost/counter"), "app://localhost/counter");
+        assert_eq!(revert("https://app.localhost/counter"), "app://localhost/counter");
+        assert_eq!(revert("http://app.localhost"), "app://localhost");
+        assert_eq!(revert("http://app.localhost:8080/a?b=c#d"), "app://localhost:8080/a?b=c#d");
+        assert_eq!(revert("http://app.localhost?x=1"), "app://localhost?x=1");
+        assert_eq!(revert("http://app.localhost#top"), "app://localhost#top");
+        assert_eq!(revert("http://APP.localhost/"), "app://localhost/");
         assert_eq!(revert_custom_scheme_workaround("http://app.localhost/", &[]), "http://app.localhost/");
+    }
+
+    #[test]
+    fn test_revert_custom_scheme_workaround_rejects_other_hosts() {
+        let schemes = vec!["app".to_string()];
+        let revert = |url: &str| revert_custom_scheme_workaround(url, &schemes);
+        for url in [
+            "https://example.com/",
+            "http://app.evil.com/",
+            "http://app.localhost.evil.com/",
+            "http://app.localhostevil/",
+            "http://evil.app.localhost/",
+            "http://xapp.localhost/",
+            "http://app.localhost:80x/",
+            "http://app.localhost:/",
+            "http://user@app.localhost/",
+            "http://app.localhost@evil.com/",
+            "ftp://app.localhost/",
+            "app://localhost/",
+            "https://example.com/?u=http://app.localhost/",
+        ] {
+            assert_eq!(revert(url), url);
+        }
     }
 
     #[test]
