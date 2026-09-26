@@ -49,6 +49,16 @@ The API is identical. Change two things:
 
 All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the same.
 
+For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid-rustinoblazor):
+
+```diff
+- using Photino.Blazor;
++ using Rustino.Blazor;
+
+- var builder = PhotinoBlazorAppBuilder.CreateDefault(args);
++ var builder = RustinoBlazorAppBuilder.CreateDefault(args);
+```
+
 ## API Reference
 
 ### Configuration (pre-run)
@@ -79,6 +89,7 @@ All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the sa
 | `SetUserAgent(string)` | Set custom user agent string |
 | `SetUserDataFolder(string)` | Set webview data folder path |
 | `AddInitScript(string)` | Add JavaScript to run before page loads |
+| `RegisterCustomSchemeHandler(string, handler)` | Serve `scheme://` requests from .NET (see [Custom Schemes](#custom-schemes)) |
 | `Load(Uri)` / `Load(string)` | Navigate to a URL or local file |
 | `LogVerbosity` | Set log verbosity (0 = silent) |
 
@@ -100,6 +111,21 @@ All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the sa
 | `ClearBadge()` | Remove the taskbar/dock badge |
 | `WaitForClose()` | Block until the window is closed |
 | `Dispose()` | Release native resources (`RustinoWindow` implements `IDisposable`) |
+
+### Custom Schemes
+
+Serve content for a custom URL scheme directly from .NET (same signature as Photino). Register handlers before `WaitForClose()`; returning `null` produces a 404:
+
+```csharp
+window.RegisterCustomSchemeHandler("app", (sender, scheme, url, out contentType) =>
+{
+    contentType = "text/html";
+    return new MemoryStream("<h1>Hello from .NET</h1>"u8.ToArray());
+});
+window.Load("app://localhost/");
+```
+
+On Windows, WebView2 sees custom schemes as `http://<scheme>.localhost/`; handlers still receive the original `<scheme>://...` URLs.
 
 ### Dialogs
 
@@ -321,6 +347,7 @@ window.SetPosition(
 | `LocationChanged` | `PointEventArgs` | Fired on move (`.X`, `.Y`) |
 | `FocusChanged` | `bool` | Fired on focus/blur |
 | `WebMessageReceived` | `string` | Fired when JS calls `window.ipc.postMessage(msg)` |
+| `WebMessageReceivedWithSource` | `WebMessageEventArgs` | Same messages with the sending page's URL (`.Message`, `.SourceUrl`): check it if the webview can navigate to other sites |
 | `PageLoaded` | `PageLoadEventArgs` | Fired on page load start/finish (`.IsStarted`, `.Url`) |
 | `Navigating` | `NavigationEventArgs` | Fired before navigation (`.Url`, set `Cancel = true` to block) |
 | `MenuItemClicked` | `string` | Fired when a menu item is clicked (the item's ID) |
@@ -336,6 +363,7 @@ All events are also available as `IObservable<T>` properties for reactive progra
 | `WhenLocationChanged` | `IObservable<(int X, int Y)>` | Position change stream |
 | `WhenFocusChanged` | `IObservable<bool>` | Focus/blur stream |
 | `WhenWebMessageReceived` | `IObservable<string>` | JS message stream |
+| `WhenWebMessageReceivedWithSource` | `IObservable<WebMessageEventArgs>` | JS message stream with the sending page's URL |
 | `WhenPageLoaded` | `IObservable<PageLoadEventArgs>` | Page load stream |
 | `WhenNavigating` | `IObservable<NavigationEventArgs>` | Navigation stream |
 | `WhenWindowClosed` | `IObservable<EventArgs>` | Window closed stream |
@@ -373,6 +401,49 @@ window.WhenFocusChangedDistinct()
     .Subscribe(focused => Console.WriteLine($"Focus: {focused}"));
 ```
 
+## Blazor Hybrid (Rustino.Blazor)
+
+The `Rustino.Blazor` package hosts Razor components in a Rustino window, like Photino.Blazor. Components run in .NET and render into the native webview; the app is served from `app://localhost/`.
+
+```csharp
+using Rustino.Blazor;
+
+var builder = RustinoBlazorAppBuilder.CreateDefault(args);
+builder.Services.AddSingleton<MyService>();   // regular dependency injection
+builder.RootComponents.Add<App>("#app");
+
+var app = builder.Build();
+app.MainWindow.SetTitle("My Blazor App");     // the underlying RustinoWindow
+app.Run();
+```
+
+Use the `Microsoft.NET.Sdk.Razor` SDK and put a host page in `wwwroot/index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <base href="/" />
+</head>
+<body>
+    <div id="app">Loading…</div>
+    <script src="_framework/blazor.webview.js"></script>
+</body>
+</html>
+```
+
+Inside components:
+
+- `@inject RustinoWindow Window` gives access to the whole native API (dialogs, notifications, menus, window state, …).
+- Native events (`SizeChanged`, `MenuItemClicked`, …) are raised outside Blazor's dispatcher: update state with `InvokeAsync(StateHasChanged)`.
+- `IJSRuntime` and `[JSInvokable]` work as in any Blazor app.
+- `@inject HttpClient Http` reads app files (e.g. `Http.GetStringAsync("data.json")`; missing files are `404 Not Found`) and forwards other requests to the network.
+- Only the app's own pages (`app://localhost/`) can talk to the components: messages from other sites the webview navigates to, or from frames of other origins embedded in the app, are ignored.
+
+Static files come from `wwwroot` next to the executable (published apps) or from the project during development. Pass an `IFileProvider` to `CreateDefault` to serve them from somewhere else (e.g. embedded resources).
+
+See [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor) for a complete example.
+
 ## Building from Source
 
 ### Prerequisites
@@ -395,7 +466,11 @@ cd ../Rustino.NET
 dotnet build
 
 # Run a sample
-cd ../Rustino.Samples/Rustino.Samples.HelloWorld
+cd ../Rustino.Samples
+dotnet run
+
+# Run the Blazor sample
+cd ../Rustino.Samples.Blazor
 dotnet run
 ```
 

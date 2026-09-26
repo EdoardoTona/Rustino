@@ -1,6 +1,8 @@
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
+use crate::window::SchemeResponse;
+
 #[derive(Clone, Copy)]
 pub struct RustinoCallbacks {
     pub context: *mut c_void,
@@ -9,11 +11,13 @@ pub struct RustinoCallbacks {
     pub on_resized: Option<unsafe extern "C" fn(*mut c_void, i32, i32)>,
     pub on_moved: Option<unsafe extern "C" fn(*mut c_void, i32, i32)>,
     pub on_focus_changed: Option<unsafe extern "C" fn(*mut c_void, i32)>,
-    pub on_web_message: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+    /// (context, message, URL of the page that sent it)
+    pub on_web_message: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>,
     pub on_page_load: Option<unsafe extern "C" fn(*mut c_void, i32, *const c_char)>,
     pub on_navigation: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> i32>,
     pub on_menu_item_clicked: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     pub on_tray_icon_clicked: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub on_custom_scheme: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *mut SchemeResponse)>,
 }
 
 impl Default for RustinoCallbacks {
@@ -30,6 +34,7 @@ impl Default for RustinoCallbacks {
             on_navigation: None,
             on_menu_item_clicked: None,
             on_tray_icon_clicked: None,
+            on_custom_scheme: None,
         }
     }
 }
@@ -52,6 +57,7 @@ mod tests {
         assert!(cb.on_navigation.is_none());
         assert!(cb.on_menu_item_clicked.is_none());
         assert!(cb.on_tray_icon_clicked.is_none());
+        assert!(cb.on_custom_scheme.is_none());
     }
 
     #[test]

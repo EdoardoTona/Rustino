@@ -20,6 +20,13 @@ public class NavigationEventArgs(string url) : System.ComponentModel.CancelEvent
     public string Url { get; } = url;
 }
 
+public class WebMessageEventArgs(string message, string sourceUrl) : EventArgs
+{
+    public string Message { get; } = message;
+    // URL of the page that sent the message (custom schemes as `scheme://...` on every platform)
+    public string SourceUrl { get; } = sourceUrl;
+}
+
 public class PageLoadEventArgs(bool isStarted, string url) : EventArgs
 {
     public bool IsStarted { get; } = isStarted;

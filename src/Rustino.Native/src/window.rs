@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::atomic::Ordering;
@@ -157,12 +158,17 @@ impl RustinoWindow {
             webview_builder = webview_builder.with_initialization_script(script);
         }
 
-        // IPC handler: JS → Rust
+        // IPC handler: JS → Rust, with the URL of the page that sent the message
         let ctx = callbacks.context;
         if let Some(cb) = callbacks.on_web_message {
+            #[cfg(target_os = "windows")]
+            let schemes = config.custom_schemes.clone();
             webview_builder = webview_builder.with_ipc_handler(move |req: wry::http::Request<String>| {
-                if let Ok(cstr) = CString::new(req.into_body()) {
-                    unsafe { cb(ctx, cstr.as_ptr()) };
+                let source = req.uri().to_string();
+                #[cfg(target_os = "windows")]
+                let source = revert_custom_scheme_workaround(&source, &schemes);
+                if let (Ok(message), Ok(source)) = (CString::new(req.into_body()), CString::new(source)) {
+                    unsafe { cb(ctx, message.as_ptr(), source.as_ptr()) };
                 }
             });
         }
@@ -179,6 +185,15 @@ impl RustinoWindow {
             webview_builder = webview_builder.with_new_window_req_handler(move |url, _features| {
                 handle_new_window_req(url, ctx, cb)
             });
+        }
+
+        // Custom scheme handlers: webview request → host response
+        if let Some(cb) = callbacks.on_custom_scheme {
+            for scheme in &config.custom_schemes {
+                webview_builder = webview_builder.with_custom_protocol(scheme.clone(), move |_id, request| {
+                    handle_custom_scheme(request.uri().to_string(), ctx, cb)
+                });
+            }
         }
 
         // Page load handler
@@ -1022,9 +1037,51 @@ pub(crate) fn handle_new_window_req(
     wry::NewWindowResponse::Deny
 }
 
+/// WebView2 serves custom schemes as `http://<scheme>.localhost/`: maps these URLs back to
+/// `<scheme>://localhost/`, the form custom scheme handlers receive.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn revert_custom_scheme_workaround(url: &str, schemes: &[String]) -> String {
+    schemes
+        .iter()
+        .find_map(|scheme| {
+            url.strip_prefix(&format!("http://{scheme}."))
+                .map(|rest| format!("{scheme}://{rest}"))
+        })
+        .unwrap_or_else(|| url.to_string())
+}
+
+/// Filled by the host (via `rustino_set_scheme_response`) while the custom scheme callback runs.
+#[derive(Default)]
+pub struct SchemeResponse {
+    pub body: Option<Vec<u8>>,
+    pub content_type: Option<String>,
+}
+
+pub(crate) fn handle_custom_scheme(
+    url: String,
+    ctx: *mut std::ffi::c_void,
+    cb: unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_char, *mut SchemeResponse),
+) -> wry::http::Response<Cow<'static, [u8]>> {
+    let mut response = SchemeResponse::default();
+    if let Ok(cstr) = CString::new(url) {
+        unsafe { cb(ctx, cstr.as_ptr(), &mut response) };
+    }
+    let builder = wry::http::Response::builder();
+    match response.body {
+        Some(body) => builder
+            .header(
+                wry::http::header::CONTENT_TYPE,
+                response.content_type.unwrap_or_else(|| "application/octet-stream".into()),
+            )
+            .body(Cow::Owned(body)),
+        None => builder.status(404).body(Cow::Borrowed(&[][..])),
+    }
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::handle_new_window_req;
+    use super::{handle_custom_scheme, handle_new_window_req, revert_custom_scheme_workaround, SchemeResponse};
     use std::ffi::CStr;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1050,6 +1107,53 @@ mod tests {
             wry::NewWindowResponse::Deny => {}
             _ => panic!("Expected Deny"),
         }
+    }
+
+    unsafe extern "C" fn respond_cb(
+        _ctx: *mut std::ffi::c_void,
+        url: *const std::ffi::c_char,
+        response: *mut SchemeResponse,
+    ) {
+        let url = unsafe { CStr::from_ptr(url) }.to_str().unwrap();
+        assert_eq!(url, "app://localhost/index.html");
+        let body = b"<html></html>";
+        unsafe {
+            crate::rustino_set_scheme_response(response, body.as_ptr(), body.len() as i32, c"text/html".as_ptr())
+        };
+    }
+
+    unsafe extern "C" fn no_response_cb(
+        _ctx: *mut std::ffi::c_void,
+        _url: *const std::ffi::c_char,
+        _response: *mut SchemeResponse,
+    ) {
+    }
+
+    #[test]
+    fn test_handle_custom_scheme_with_response() {
+        let resp = handle_custom_scheme("app://localhost/index.html".to_string(), std::ptr::null_mut(), respond_cb);
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers()["content-type"], "text/html");
+        assert_eq!(resp.body().as_ref(), b"<html></html>");
+    }
+
+    #[test]
+    fn test_revert_custom_scheme_workaround() {
+        let schemes = vec!["app".to_string()];
+        assert_eq!(revert_custom_scheme_workaround("http://app.localhost/counter", &schemes), "app://localhost/counter");
+        assert_eq!(revert_custom_scheme_workaround("https://example.com/", &schemes), "https://example.com/");
+        assert_eq!(
+            revert_custom_scheme_workaround("https://example.com/?u=http://app.localhost/", &schemes),
+            "https://example.com/?u=http://app.localhost/"
+        );
+        assert_eq!(revert_custom_scheme_workaround("http://app.localhost/", &[]), "http://app.localhost/");
+    }
+
+    #[test]
+    fn test_handle_custom_scheme_without_response_is_404() {
+        let resp = handle_custom_scheme("app://localhost/missing".to_string(), std::ptr::null_mut(), no_response_cb);
+        assert_eq!(resp.status(), 404);
+        assert!(resp.body().is_empty());
     }
 
     #[test]

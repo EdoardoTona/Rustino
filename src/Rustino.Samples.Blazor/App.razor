@@ -1,0 +1,110 @@
+@implements IDisposable
+@inject RustinoWindow Window
+@inject IJSRuntime JS
+
+<h1>Rustino.Blazor</h1>
+<p class="muted">Razor components running in .NET, rendered in a native Rustino window.</p>
+
+<section @oncontextmenu="ShowContextMenu" @oncontextmenu:preventDefault>
+    <h2>Blazor state</h2>
+    <p class="count">@count</p>
+    <button @onclick="() => count++">Increment</button>
+    <p class="muted">Right-click this card: the native context menu updates the counter.</p>
+</section>
+
+<section>
+    <h2>Blazor → native</h2>
+    <div class="row">
+        <input @bind="title" />
+        <button @onclick="() => Window.SetTitle(title)">Set title</button>
+    </div>
+    <div class="row">
+        <button @onclick="OpenFile">Open file…</button>
+        <button @onclick="Notify">Notify</button>
+        <button @onclick="() => Window.SetBadgeCount(count)">Badge = count</button>
+        <button @onclick="() => Window.SetFullscreen(!Window.IsFullscreen)">Fullscreen</button>
+    </div>
+    @if (file != null)
+    {
+        <p>Selected: <code>@file</code></p>
+    }
+</section>
+
+<section>
+    <h2>Native → Blazor</h2>
+    <p>Size <strong>@size.Width × @size.Height</strong> · Focused <strong>@(focused ? "yes" : "no")</strong></p>
+    <p class="muted">Resize the window or switch to another app: native events update this component.</p>
+</section>
+
+<section>
+    <h2>JavaScript interop</h2>
+    <div class="row">
+        <button @onclick="GetUserAgent">.NET → JS</button>
+        <code>@(userAgent ?? "navigator.userAgent")</code>
+    </div>
+    <p>JS → .NET: the OS color scheme is <strong>@colorScheme</strong> (try changing it).</p>
+</section>
+
+@code {
+    private readonly RustinoMenu contextMenu = new RustinoMenu()
+        .AddItem("increment", "Increment")
+        .AddItem("reset", "Reset");
+
+    private int count;
+    private string title = "Rustino.Blazor Sample";
+    private string? file;
+    private (int Width, int Height) size;
+    private bool focused = true;
+    private string? userAgent;
+    private string colorScheme = "unknown";
+    private DotNetObjectReference<App>? selfRef;
+
+    protected override void OnInitialized()
+    {
+        size = Window.GetSize();
+        Window.SizeChanged += OnSizeChanged;
+        Window.FocusChanged += OnFocusChanged;
+        Window.MenuItemClicked += OnMenuItemClicked;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        selfRef = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("sample.watchColorScheme", selfRef);
+    }
+
+    // Called from app.js
+    [JSInvokable]
+    public void OnColorSchemeChanged(bool dark)
+    {
+        colorScheme = dark ? "dark" : "light";
+        StateHasChanged();
+    }
+
+    private void ShowContextMenu() => Window.ShowContextMenu(contextMenu);
+
+    private void OpenFile() => file = Window.ShowOpenFileDialog(title: "Pick a file")?.FirstOrDefault();
+
+    private void Notify() => RustinoWindow.ShowNotification("Rustino.Blazor", $"The counter is {count}");
+
+    private async Task GetUserAgent() => userAgent = await JS.InvokeAsync<string>("sample.userAgent");
+
+    // Native events arrive outside Blazor's dispatcher: use InvokeAsync to update the UI
+    private void OnSizeChanged(object? sender, SizeEventArgs e) =>
+        InvokeAsync(() => { size = (e.Width, e.Height); StateHasChanged(); });
+
+    private void OnFocusChanged(object? sender, bool value) =>
+        InvokeAsync(() => { focused = value; StateHasChanged(); });
+
+    private void OnMenuItemClicked(object? sender, string id) =>
+        InvokeAsync(() => { count = id == "increment" ? count + 1 : 0; StateHasChanged(); });
+
+    public void Dispose()
+    {
+        Window.SizeChanged -= OnSizeChanged;
+        Window.FocusChanged -= OnFocusChanged;
+        Window.MenuItemClicked -= OnMenuItemClicked;
+        selfRef?.Dispose();
+    }
+}

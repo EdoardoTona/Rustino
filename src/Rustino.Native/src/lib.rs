@@ -564,6 +564,40 @@ pub unsafe extern "C" fn rustino_add_init_script(instance: *mut RustinoWindow, j
     });
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_add_custom_scheme(instance: *mut RustinoWindow, scheme: *const c_char) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            if let Some(s) = unsafe { util::cstr_to_string(scheme) } {
+                inst.config.custom_schemes.push(s);
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Custom scheme response (called by the host from within the custom scheme callback)
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_scheme_response(
+    response: *mut window::SchemeResponse,
+    data: *const u8,
+    length: i32,
+    content_type: *const c_char,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(r) = unsafe { response.as_mut() } {
+            r.body = Some(if data.is_null() || length <= 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(data, length as usize) }.to_vec()
+            });
+            r.content_type = unsafe { util::cstr_to_string(content_type) };
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Window state (post-run commands)
 // ---------------------------------------------------------------------------
@@ -1203,7 +1237,7 @@ pub unsafe extern "C" fn rustino_set_focus_changed_handler(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_web_message_received_handler(
     instance: *mut RustinoWindow,
-    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>,
 ) {
     let _ = catch_unwind(|| {
         if let Some(inst) = unsafe { instance.as_mut() } {
@@ -1256,6 +1290,18 @@ pub unsafe extern "C" fn rustino_set_tray_icon_event_handler(
     let _ = catch_unwind(|| {
         if let Some(inst) = unsafe { instance.as_mut() } {
             inst.callbacks.on_tray_icon_clicked = handler;
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_custom_scheme_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *mut window::SchemeResponse)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.callbacks.on_custom_scheme = handler;
         }
     });
 }

@@ -43,6 +43,7 @@ public class RustinoWindow : IDisposable
     private bool _mediaAutoplay = true;
     private bool _zoomHotkeys;
     private readonly List<string> _initScripts = new();
+    private readonly Dictionary<string, NetCustomSchemeDelegate> _customSchemes = new(StringComparer.OrdinalIgnoreCase);
 
     // About metadata fields
     private string? _aboutName;
@@ -58,6 +59,7 @@ public class RustinoWindow : IDisposable
     private readonly EventObservable<(int X, int Y)> _locationChangedObs = new();
     private readonly EventObservable<bool> _focusChangedObs = new();
     private readonly EventObservable<string> _webMessageObs = new();
+    private readonly EventObservable<WebMessageEventArgs> _webMessageWithSourceObs = new();
     private readonly EventObservable<PageLoadEventArgs> _pageLoadedObs = new();
     private readonly EventObservable<NavigationEventArgs> _navigatingObs = new();
     private readonly EventObservable<EventArgs> _windowClosedObs = new();
@@ -75,15 +77,19 @@ public class RustinoWindow : IDisposable
     private static readonly SizeCallback ResizedCb = OnResizedNative;
     private static readonly PointCallback MovedCb = OnMovedNative;
     private static readonly IntCallback FocusCb = OnFocusChangedNative;
-    private static readonly StringCallback WebMsgCb = OnWebMessageNative;
+    private static readonly WebMessageCallback WebMsgCb = OnWebMessageNative;
     private static readonly PageLoadCallback PageLoadCb = OnPageLoadNative;
     private static readonly NavigationCallback NavCb = OnNavigationNative;
     private static readonly StringCallback MenuItemCb = OnMenuItemClickedNative;
     private static readonly VoidContextCallback TrayCb = OnTrayIconClickedNative;
+    private static readonly CustomSchemeCallback CustomSchemeCb = OnCustomSchemeNative;
 
     // --- Logging delegate ---
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void LogCallback(IntPtr context, int level, IntPtr message);
+
+    // --- Custom scheme delegate (same signature as Photino) ---
+    public delegate Stream? NetCustomSchemeDelegate(object sender, string scheme, string url, out string? contentType);
 
     // --- Events ---
 
@@ -93,6 +99,9 @@ public class RustinoWindow : IDisposable
     public event EventHandler<PointEventArgs>? LocationChanged;
     public event EventHandler<bool>? FocusChanged;
     public event EventHandler<string>? WebMessageReceived;
+    // Same messages with the URL of the sending page: check it before trusting a message
+    // if the webview can navigate to other sites
+    public event EventHandler<WebMessageEventArgs>? WebMessageReceivedWithSource;
     public event EventHandler<PageLoadEventArgs>? PageLoaded;
     public event EventHandler<NavigationEventArgs>? Navigating;
     public event EventHandler<string>? MenuItemClicked;
@@ -104,6 +113,7 @@ public class RustinoWindow : IDisposable
     public IObservable<(int X, int Y)> WhenLocationChanged => _locationChangedObs;
     public IObservable<bool> WhenFocusChanged => _focusChangedObs;
     public IObservable<string> WhenWebMessageReceived => _webMessageObs;
+    public IObservable<WebMessageEventArgs> WhenWebMessageReceivedWithSource => _webMessageWithSourceObs;
     public IObservable<PageLoadEventArgs> WhenPageLoaded => _pageLoadedObs;
     public IObservable<NavigationEventArgs> WhenNavigating => _navigatingObs;
     public IObservable<EventArgs> WhenWindowClosed => _windowClosedObs;
@@ -359,6 +369,19 @@ public class RustinoWindow : IDisposable
     public RustinoWindow AddInitScript(string script)
     {
         _initScripts.Add(script);
+        return this;
+    }
+
+    // Serves requests for `scheme://...` URLs from .NET. Must be registered before WaitForClose().
+    // Returning null from the handler produces a 404 response.
+    public RustinoWindow RegisterCustomSchemeHandler(string scheme, NetCustomSchemeDelegate handler)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scheme);
+        ArgumentNullException.ThrowIfNull(handler);
+        scheme = scheme.ToLowerInvariant();
+        if (_nativeHandle != IntPtr.Zero && !_customSchemes.ContainsKey(scheme))
+            RustinoDllImports.rustino_add_custom_scheme(_nativeHandle, scheme);
+        _customSchemes[scheme] = handler;
         return this;
     }
 
@@ -826,6 +849,8 @@ public class RustinoWindow : IDisposable
                 RustinoDllImports.rustino_set_zoom_hotkeys(_nativeHandle, 1);
             foreach (var script in _initScripts)
                 RustinoDllImports.rustino_add_init_script(_nativeHandle, script);
+            foreach (var scheme in _customSchemes.Keys)
+                RustinoDllImports.rustino_add_custom_scheme(_nativeHandle, scheme);
 
             if (_iconFile != null && OperatingSystem.IsMacOS())
             {
@@ -856,6 +881,7 @@ public class RustinoWindow : IDisposable
         RustinoDllImports.rustino_set_navigation_handler(_nativeHandle, NavCb);
         RustinoDllImports.rustino_set_menu_event_handler(_nativeHandle, MenuItemCb);
         RustinoDllImports.rustino_set_tray_icon_event_handler(_nativeHandle, TrayCb);
+        RustinoDllImports.rustino_set_custom_scheme_handler(_nativeHandle, CustomSchemeCb);
     }
 
     private void UnregisterCallbacks()
@@ -906,13 +932,17 @@ public class RustinoWindow : IDisposable
         w._focusChangedObs.Emit(isFocused);
     }
 
-    private static void OnWebMessageNative(IntPtr ctx, IntPtr msgPtr)
+    private static void OnWebMessageNative(IntPtr ctx, IntPtr msgPtr, IntPtr sourceUrlPtr)
     {
         if (!Instances.TryGetValue(ctx, out var w)) return;
         var msg = Marshal.PtrToStringUTF8(msgPtr);
         if (msg == null) return;
         w.WebMessageReceived?.Invoke(w, msg);
         w._webMessageObs.Emit(msg);
+
+        var args = new WebMessageEventArgs(msg, Marshal.PtrToStringUTF8(sourceUrlPtr) ?? "");
+        w.WebMessageReceivedWithSource?.Invoke(w, args);
+        w._webMessageWithSourceObs.Emit(args);
     }
 
     private static void OnPageLoadNative(IntPtr ctx, int eventType, IntPtr urlPtr)
@@ -955,6 +985,21 @@ public class RustinoWindow : IDisposable
         w._trayIconClickedObs.Emit(EventArgs.Empty);
     }
 
+    private static void OnCustomSchemeNative(IntPtr ctx, IntPtr urlPtr, IntPtr response)
+    {
+        if (!Instances.TryGetValue(ctx, out var w)) return;
+        var url = Marshal.PtrToStringUTF8(urlPtr);
+        if (url == null) return;
+        var scheme = url.Split(':', 2)[0];
+        if (!w._customSchemes.TryGetValue(scheme, out var handler)) return;
+
+        using var content = handler(w, scheme, url, out var contentType);
+        if (content == null) return;
+        using var buffer = new MemoryStream();
+        content.CopyTo(buffer);
+        RustinoDllImports.rustino_set_scheme_response(response, buffer.GetBuffer(), (int)buffer.Length, contentType);
+    }
+
     private static void OnLogMessageNative(IntPtr ctx, int level, IntPtr messagePtr)
     {
         if (ctx == IntPtr.Zero) return;
@@ -986,6 +1031,7 @@ public class RustinoWindow : IDisposable
         w._locationChangedObs.Complete();
         w._focusChangedObs.Complete();
         w._webMessageObs.Complete();
+        w._webMessageWithSourceObs.Complete();
         w._pageLoadedObs.Complete();
         w._navigatingObs.Complete();
         w._windowClosedObs.Complete();
