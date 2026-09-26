@@ -16,31 +16,46 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
-  <!-- Native library: local dev (current platform, not packed into NuGet) -->
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
-    <Content Include="../Rustino.Native/target/release/rustino_native.dll"
+  <!--
+    Host (build machine) native library information. `NETCoreSdkRuntimeIdentifier` is the RID of
+    the machine running the build, matching the default cargo target (e.g. osx-arm64, win-x64).
+  -->
+  <PropertyGroup>
+    <_RustinoHostRuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</_RustinoHostRuntimeIdentifier>
+    <_RustinoHostNativeFileName Condition="$([MSBuild]::IsOSPlatform('Windows'))">rustino_native.dll</_RustinoHostNativeFileName>
+    <_RustinoHostNativeFileName Condition="$([MSBuild]::IsOSPlatform('OSX'))">librustino_native.dylib</_RustinoHostNativeFileName>
+    <_RustinoHostNativeFileName Condition="$([MSBuild]::IsOSPlatform('Linux'))">librustino_native.so</_RustinoHostNativeFileName>
+    <_RustinoHostNativeSource>../Rustino.Native/target/release/$(_RustinoHostNativeFileName)</_RustinoHostNativeSource>
+    <_RustinoHostNativeStaged>runtimes/$(_RustinoHostRuntimeIdentifier)/native/$(_RustinoHostNativeFileName)</_RustinoHostNativeStaged>
+  </PropertyGroup>
+
+  <!--
+    Native library layout.
+
+    Binaries are always emitted under `runtimes/<rid>/native/`, never at the output root.
+    `NativeLibraryResolver` probes `runtimes/<process-rid>/native/` at runtime and loads the
+    matching binary, so the build host's library (e.g. a .dylib while cross-publishing for
+    Windows or Linux) can never shadow the target platform's binary.
+
+    Local dev: the cargo build of the current platform is copied into the layout.
+    CI / cross-platform: `cargo build release for a target triple` and stage the results into
+    runtimes/<rid>/native/ (see .github/workflows/release.yml); those are copied to the output
+    of consuming apps and packed into the NuGet package.
+  -->
+  <ItemGroup Condition="Exists('$(_RustinoHostNativeSource)') And '$(_RustinoHostNativeFileName)' != '' And !Exists('$(_RustinoHostNativeStaged)')">
+    <Content Include="$(_RustinoHostNativeSource)"
              Pack="false"
              CopyToOutputDirectory="PreserveNewest"
-             Link="rustino_native.dll"
-             Condition="Exists('../Rustino.Native/target/release/rustino_native.dll')" />
-  </ItemGroup>
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-    <Content Include="../Rustino.Native/target/release/librustino_native.dylib"
-             Pack="false"
-             CopyToOutputDirectory="PreserveNewest"
-             Link="librustino_native.dylib"
-             Condition="Exists('../Rustino.Native/target/release/librustino_native.dylib')" />
-  </ItemGroup>
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
-    <Content Include="../Rustino.Native/target/release/librustino_native.so"
-             Pack="false"
-             CopyToOutputDirectory="PreserveNewest"
-             Link="librustino_native.so"
-             Condition="Exists('../Rustino.Native/target/release/librustino_native.so')" />
+             Link="$(_RustinoHostNativeStaged)" />
   </ItemGroup>
 
-  <!-- CI: cross-platform native binaries staged into runtimes/ before pack -->
   <ItemGroup Condition="Exists('runtimes/')">
+    <!-- Staged cross-platform binaries follow the app to its output/publish directory... -->
+    <Content Include="runtimes/**/*"
+             Pack="false"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- ...and ship inside the NuGet package for RID-aware consumers. -->
     <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/" />
   </ItemGroup>
 
