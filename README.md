@@ -156,7 +156,7 @@ Native cross-platform application menus and context menus (powered by [muda](htt
 // Application menu bar
 var menu = new RustinoMenu()
     .AddSubmenu("File", file => file
-        .AddItem("new", "New", accelerator: "CmdOrCtrl+N")
+        .AddItem("new", "New", accelerator: "CmdOrCtrl+N", iconPath: "new.png")
         .AddItem("open", "Open...", accelerator: "CmdOrCtrl+O")
         .AddSeparator()
         .AddItem("exit", "Exit"))
@@ -167,8 +167,11 @@ var menu = new RustinoMenu()
         .AddPredefinedItem(PredefinedMenuItem.Copy)
         .AddPredefinedItem(PredefinedMenuItem.Paste, label: "Paste here")
         .AddSeparator()
-        .AddCheckItem("wordwrap", "Word Wrap", isChecked: true))
-    .AddSubmenu("Help", help => help
+        .AddCheckItem("wordwrap", "Word Wrap", isChecked: true, accelerator: "Alt+Z"))
+    .AddWindowMenu("Window", win => win
+        .AddPredefinedItem(PredefinedMenuItem.Minimize)
+        .AddPredefinedItem(PredefinedMenuItem.Maximize))
+    .AddHelpMenu("Help", help => help
         .AddItem("about", "About"));
 
 window.SetMenu(menu);
@@ -184,9 +187,23 @@ window.ShowContextMenu(ctx);
 // Handle clicks
 window.MenuItemClicked += (_, id) => Console.WriteLine($"Clicked: {id}");
 
+// A click toggles a check item: its new state comes after MenuItemClicked
+window.MenuItemCheckedChanged += (_, e) => Console.WriteLine($"{e.Id}: {e.IsChecked}");
+
+// Change items without rebuilding the menu
+window.SetMenuItemEnabled("open", false);
+window.SetMenuItemChecked("wordwrap", false);
+window.SetMenuItemText("open", "Open Recent...");
+
 // Remove menu bar
 window.RemoveMenu();
 ```
+
+The `SetMenuItem*` methods change every item with that id in the menu bar and in the tray menu, until the menu is set again. Items with the same id stay in sync when the user toggles one of them. A context menu is built from its `RustinoMenu` at every `ShowContextMenu`, so it always shows the values of the definition: build it when you show it, with the current values (for a check item, the state received from `MenuItemCheckedChanged`).
+
+`iconPath` shows an image next to the label, scaled to the menu's icon size; if it can't be read, the item has no icon.
+
+On macOS, the system lists the open windows in the menu added with `AddWindowMenu` and adds a search field to the one added with `AddHelpMenu`; on Windows and Linux both are normal submenus. Until `SetMenu`, macOS shows a standard menu bar: the application menu, Edit and Window.
 
 Predefined items run a native OS action and don't raise `MenuItemClicked`. On macOS, a custom menu bar replaces the default one: include the predefined Edit items, otherwise Cmd+C/V/X/A stop working in the webview.
 
@@ -216,7 +233,7 @@ Support depends on the platform (muda):
 
 "Omitted" items are not added to the menu. ¹ Clicking the item sends the shortcut through libxdo; on Wayland it does nothing (the keyboard shortcut still works in the webview).
 
-On Windows, Ctrl+C/X/V/A/Z/Y always go to the webview, which handles them natively: custom items can't use them as accelerators there.
+On Windows, Ctrl+C/X/V/A/Z/Y go to the webview, which handles them natively, unless a custom item uses them: the item then replaces the native shortcut. If the menu also has the predefined item with the same shortcut (Copy, Cut, Paste, Select All, Undo, Redo), the shortcut stays with the webview.
 
 ### System Tray
 
@@ -237,12 +254,36 @@ using var stream = Assembly.GetExecutingAssembly()
     .GetManifestResourceStream("MyApp.tray.png")!;
 window.SetTrayIcon(stream, tooltip: "My App", menu: trayMenu);
 
+// macOS: a monochrome template icon that follows the light or dark menu bar, text next to
+// the icon, and the menu only on right click
+window.SetTrayIcon("tray-template.png", tooltip: "My App", menu: trayMenu,
+    title: "3", isTemplateIcon: true, menuOnLeftClick: false);
+window.SetTrayTitle("4");
+
 // Handle tray icon clicks
-window.TrayIconClicked += (_, _) => window.SetVisible(true);
+window.TrayIconClicked += (_, e) =>
+{
+    if (e.Button == TrayMouseButton.Left)
+        window.SetVisible(true);
+};
 
 // Remove tray icon
 window.RemoveTrayIcon();
 ```
+
+`TrayIconClicked` is raised once per click, with the button and the cursor position in physical pixels. It's raised when the button is released, or when it's pressed if the click opens the tray menu (on macOS the menu takes the release). By default both left and right click open the menu: with `menuOnLeftClick: false` left clicks only raise `TrayIconClicked`.
+
+A template icon uses only the image's alpha channel, so a colored icon turns into a solid silhouette: use it with a black shape on a transparent background.
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| `TrayIconClicked` | OK | OK | never raised¹ |
+| `tooltip` | OK | OK | not supported |
+| `title`, `SetTrayTitle` | OK | not supported | only on some desktops |
+| `isTemplateIcon` | OK | ignored | ignored |
+| `menuOnLeftClick` | OK | OK | ignored: any click opens the menu |
+
+¹ On Linux the tray icon is an AppIndicator (libayatana-appindicator), which doesn't report clicks: put every action in the tray menu.
 
 ### Taskbar Badge
 
@@ -311,7 +352,8 @@ window.SetPosition(
 | `PageLoaded` | `PageLoadEventArgs` | Fired on page load start/finish (`.IsStarted`, `.Url`) |
 | `Navigating` | `NavigationEventArgs` | Fired before navigation (`.Url`, set `Cancel = true` to block) |
 | `MenuItemClicked` | `string` | Fired when a menu item is clicked (the item's ID) |
-| `TrayIconClicked` | `EventArgs` | Fired when the system tray icon is clicked |
+| `MenuItemCheckedChanged` | `MenuItemCheckedEventArgs` | Fired after `MenuItemClicked` when the user toggles a check item (`.Id`, `.IsChecked`) |
+| `TrayIconClicked` | `TrayIconClickedEventArgs` | Fired once per click on the tray icon (`.Button`, `.X`, `.Y`); never on Linux |
 
 ### Observable Streams (IObservable&lt;T&gt;)
 
@@ -327,7 +369,8 @@ All events are also available as `IObservable<T>` properties for reactive progra
 | `WhenNavigating` | `IObservable<NavigationEventArgs>` | Navigation stream |
 | `WhenWindowClosed` | `IObservable<EventArgs>` | Window closed stream |
 | `WhenMenuItemClicked` | `IObservable<string>` | Menu item click stream |
-| `WhenTrayIconClicked` | `IObservable<EventArgs>` | Tray icon click stream |
+| `WhenMenuItemCheckedChanged` | `IObservable<MenuItemCheckedEventArgs>` | Check item toggle stream |
+| `WhenTrayIconClicked` | `IObservable<TrayIconClickedEventArgs>` | Tray icon click stream |
 
 All streams complete automatically when the window closes or is disposed.
 

@@ -27,6 +27,28 @@ public class PageLoadEventArgs(bool isStarted, string url) : EventArgs
     public string Url { get; } = url;
 }
 
+public class MenuItemCheckedEventArgs(string id, bool isChecked) : EventArgs
+{
+    public string Id { get; } = id;
+    public bool IsChecked { get; } = isChecked;
+}
+
+public enum TrayMouseButton
+{
+    Left,
+    Right,
+    Middle,
+}
+
+public class TrayIconClickedEventArgs(TrayMouseButton button, int x, int y) : EventArgs
+{
+    public TrayMouseButton Button { get; } = button;
+
+    // Cursor position in physical pixels
+    public int X { get; } = x;
+    public int Y { get; } = y;
+}
+
 public class MonitorInfo
 {
     [JsonPropertyName("name")]

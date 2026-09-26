@@ -1,6 +1,7 @@
 use std::sync::mpsc;
 
 use crate::config::AboutField;
+use crate::menu::MenuItemUpdate;
 
 #[derive(Debug)]
 pub enum RustinoCommand {
@@ -35,7 +36,9 @@ pub enum RustinoCommand {
     SetMenu(String),
     RemoveMenu,
     ShowContextMenu(String, Option<(f64, f64)>),
+    UpdateMenuItem(String, MenuItemUpdate),
     SetTrayIcon(TrayParams),
+    SetTrayTitle(Option<String>),
     RemoveTrayIcon,
 
     SetBadgeCount {
@@ -51,8 +54,14 @@ pub enum RustinoCommand {
     GetMonitors(mpsc::Sender<String>),
     GetCurrentMonitor(mpsc::Sender<String>),
 
-    MenuEventFired(String),
-    TrayIconClicked,
+    MenuEventFired(muda::MenuId),
+    TrayIconButton {
+        id: tray_icon::TrayIconId,
+        button: tray_icon::MouseButton,
+        pressed: bool,
+        x: i32,
+        y: i32,
+    },
 
     Close,
 }
@@ -70,4 +79,7 @@ pub struct TrayParams {
     pub icon_path: String,
     pub tooltip: Option<String>,
     pub menu_json: Option<String>,
+    pub title: Option<String>,
+    pub icon_is_template: bool,
+    pub menu_on_left_click: bool,
 }

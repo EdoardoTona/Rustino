@@ -8,6 +8,7 @@
   <ItemGroup>
     <None Update="icon.png" CopyToOutputDirectory="PreserveNewest" />
     <None Update="splash.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="tray-template.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Rustino.NET/Rustino.NET.csproj" />
