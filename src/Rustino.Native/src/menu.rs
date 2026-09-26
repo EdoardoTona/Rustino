@@ -25,6 +25,8 @@ pub enum MenuItemDef {
     },
     #[serde(rename = "separator")]
     Separator,
+    #[serde(rename = "predefined")]
+    Predefined { item: String, label: Option<String> },
     #[serde(rename = "submenu")]
     Submenu {
         label: String,
@@ -42,12 +44,31 @@ pub fn build_menu(json: &str) -> Option<BuiltMenu> {
     let defs: Vec<MenuItemDef> = serde_json::from_str(json).ok()?;
     let menu = Menu::new();
     let mut id_map = HashMap::new();
-    for def in &defs {
-        if let Some(item) = build_item(def, &mut id_map) {
-            let _ = menu.append(item.as_ref());
+    append_items(&|item| menu.append(item), &defs, &mut id_map);
+    Some(BuiltMenu { menu, id_map })
+}
+
+/// Builds top-down: on Windows muda registers an item's accelerator only if its
+/// submenu is already attached to the menu.
+fn append_items(
+    append: &dyn Fn(&dyn IsMenuItem) -> muda::Result<()>,
+    defs: &[MenuItemDef],
+    id_map: &mut HashMap<MenuId, String>,
+) {
+    for def in defs {
+        if let MenuItemDef::Submenu {
+            label,
+            enabled,
+            items,
+        } = def
+        {
+            let submenu = Submenu::new(label, enabled.unwrap_or(true));
+            let _ = append(&submenu);
+            append_items(&|item| submenu.append(item), items, id_map);
+        } else if let Some(item) = build_item(def, id_map) {
+            let _ = append(item.as_ref());
         }
     }
-    Some(BuiltMenu { menu, id_map })
 }
 
 fn build_item(
@@ -85,18 +106,51 @@ fn build_item(
             Some(Box::new(item))
         }
         MenuItemDef::Separator => Some(Box::new(PredefinedMenuItem::separator())),
-        MenuItemDef::Submenu {
-            label,
-            enabled,
-            items,
-        } => {
-            let submenu = Submenu::new(label, enabled.unwrap_or(true));
-            for child in items {
-                if let Some(item) = build_item(child, id_map) {
-                    let _ = submenu.append(item.as_ref());
-                }
-            }
-            Some(Box::new(submenu))
+        // Native OS actions (e.g. Copy/Paste reach the focused webview); they fire no menu events
+        MenuItemDef::Predefined { item, label } => {
+            let label = label.as_deref();
+            let item = match item.as_str() {
+                "undo" => PredefinedMenuItem::undo(label),
+                "redo" => PredefinedMenuItem::redo(label),
+                "cut" => PredefinedMenuItem::cut(label),
+                "copy" => PredefinedMenuItem::copy(label),
+                "paste" => PredefinedMenuItem::paste(label),
+                "select_all" => PredefinedMenuItem::select_all(label),
+                "minimize" => PredefinedMenuItem::minimize(label),
+                "maximize" => PredefinedMenuItem::maximize(label),
+                "fullscreen" => PredefinedMenuItem::fullscreen(label),
+                "hide" => PredefinedMenuItem::hide(label),
+                "hide_others" => PredefinedMenuItem::hide_others(label),
+                "show_all" => PredefinedMenuItem::show_all(label),
+                "close_window" => PredefinedMenuItem::close_window(label),
+                "quit" => PredefinedMenuItem::quit(label),
+                "services" => PredefinedMenuItem::services(label),
+                "bring_all_to_front" => PredefinedMenuItem::bring_all_to_front(label),
+                _ => return None,
+            };
+            Some(Box::new(item))
         }
+        // Built by append_items
+        MenuItemDef::Submenu { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MenuItemDef;
+
+    fn predefined(json: &str) -> (String, Option<String>) {
+        match serde_json::from_str(json).unwrap() {
+            MenuItemDef::Predefined { item, label } => (item, label),
+            _ => panic!("not a predefined item"),
+        }
+    }
+
+    #[test]
+    fn parses_predefined_item() {
+        let copy = predefined(r#"{"type":"predefined","item":"copy","label":"Copy"}"#);
+        assert_eq!(copy, ("copy".into(), Some("Copy".into())));
+        let quit = predefined(r#"{"type":"predefined","item":"quit"}"#);
+        assert_eq!(quit, ("quit".into(), None));
     }
 }

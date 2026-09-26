@@ -161,8 +161,11 @@ var menu = new RustinoMenu()
         .AddSeparator()
         .AddItem("exit", "Exit"))
     .AddSubmenu("Edit", edit => edit
-        .AddItem("undo", "Undo", accelerator: "CmdOrCtrl+Z")
-        .AddItem("redo", "Redo", accelerator: "CmdOrCtrl+Y")
+        .AddPredefinedItem(PredefinedMenuItem.Undo)
+        .AddPredefinedItem(PredefinedMenuItem.Redo)
+        .AddSeparator()
+        .AddPredefinedItem(PredefinedMenuItem.Copy)
+        .AddPredefinedItem(PredefinedMenuItem.Paste, label: "Paste here")
         .AddSeparator()
         .AddCheckItem("wordwrap", "Word Wrap", isChecked: true))
     .AddSubmenu("Help", help => help
@@ -184,6 +187,22 @@ window.MenuItemClicked += (_, id) => Console.WriteLine($"Clicked: {id}");
 // Remove menu bar
 window.RemoveMenu();
 ```
+
+Predefined items run a native OS action and don't raise `MenuItemClicked`. On macOS, a custom menu bar replaces the default one: include the predefined Edit items, otherwise Cmd+C/V/X/A stop working in the webview.
+
+On macOS, `SetMenu` also prepends the standard application menu (About, Hide, Hide Others, Show All, Quit), shown with the app name, so your first submenu (e.g. File) stays visible.
+
+Support depends on the platform (muda):
+
+| Predefined item | macOS | Windows | Linux |
+|---|---|---|---|
+| `Cut`, `Copy`, `Paste`, `SelectAll` | OK | OK | X11 only¹ |
+| `Undo`, `Redo`, `Minimize`, `Maximize`, `Hide`, `CloseWindow`, `Quit` | OK | OK | omitted |
+| `Fullscreen`, `HideOthers`, `ShowAll`, `Services`, `BringAllToFront` | OK | shown, does nothing | omitted |
+
+"Omitted" items are not added to the menu. ¹ Clicking the item sends the shortcut through libxdo; on Wayland it does nothing (the keyboard shortcut still works in the webview).
+
+On Windows, Ctrl+C/X/V/A/Z/Y always go to the webview, which handles them natively: custom items can't use them as accelerators there.
 
 ### System Tray
 

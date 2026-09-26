@@ -3,6 +3,8 @@
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::unnecessary_map_or)]
 
+#[cfg(target_os = "windows")]
+mod accelerators;
 mod callbacks;
 mod commands;
 mod config;
