@@ -51,14 +51,16 @@ impl RustinoWindow {
     }
 
     pub fn run(&mut self) {
-        let config = std::mem::take(&mut self.config);
+        let mut config = std::mem::take(&mut self.config);
         let callbacks = self.callbacks;
 
         configure_webview2_args(&config);
 
         let mut builder = EventLoopBuilder::<RustinoCommand>::with_user_event();
         #[cfg(target_os = "windows")]
-        builder.with_any_thread(true);
+        builder
+            .with_any_thread(true)
+            .with_msg_hook(|msg| crate::accelerators::translate(unsafe { &*msg.cast() }));
         let mut event_loop = builder.build();
         *self.proxy.write().unwrap() = Some(event_loop.create_proxy());
 
@@ -203,6 +205,9 @@ impl RustinoWindow {
             .build(&window)
             .expect("failed to build webview");
 
+        #[cfg(target_os = "windows")]
+        crate::accelerators::attach_webview(&webview);
+
         // Initialize shared state from actual window
         let size = window.inner_size();
         let pos = window
@@ -251,7 +256,7 @@ impl RustinoWindow {
 
         #[cfg(target_os = "macos")]
         let mut current_menu: Option<muda::Menu> = {
-            let default_menu = create_default_macos_menu(&config);
+            let default_menu = create_default_macos_menu(&config, &about_metadata(&config));
             attach_menu_to_window(&default_menu, &window);
             Some(default_menu)
         };
@@ -277,6 +282,7 @@ impl RustinoWindow {
                         callbacks,
                         &menu_id_map,
                         &mut current_menu,
+                        &mut config,
                         &mut tray,
                     ) {
                         *control_flow = ControlFlow::Exit;
@@ -340,6 +346,8 @@ impl RustinoWindow {
         tray_icon::TrayIconEvent::set_event_handler(
             None::<Box<dyn Fn(tray_icon::TrayIconEvent) + Send + Sync>>,
         );
+        #[cfg(target_os = "windows")]
+        crate::accelerators::set_menu(0, None);
         *self.proxy.write().unwrap() = None;
     }
 }
@@ -460,6 +468,7 @@ fn dispatch_command(
     callbacks: RustinoCallbacks,
     menu_id_map: &Arc<std::sync::Mutex<HashMap<MenuId, String>>>,
     current_menu: &mut Option<muda::Menu>,
+    config: &mut WindowConfig,
     tray: &mut Option<tray_icon::TrayIcon>,
 ) -> bool {
     match cmd {
@@ -505,7 +514,9 @@ fn dispatch_command(
             if let Some(ico) = icon::load_icon(&path) {
                 window.set_window_icon(Some(ico));
             }
+            config.icon_file = Some(path);
         }
+        RustinoCommand::SetAbout(field, value) => config.set_about(field, value),
         RustinoCommand::EvaluateScript(js) => {
             let _ = webview.evaluate_script(&js);
         }
@@ -552,7 +563,19 @@ fn dispatch_command(
             if let Some(old) = current_menu.take() {
                 remove_menu_from_window(&old, window);
             }
-            if let Some(built) = menu::build_menu(&json) {
+            let about = about_metadata(config);
+            if let Some(built) = menu::build_menu(&json, &about) {
+                // On macOS the first submenu of the menu bar becomes the application menu: without
+                // AddAppMenu the standard one is prepended so the first custom submenu stays visible.
+                #[cfg(target_os = "macos")]
+                let app_menu = built
+                    .app_menu
+                    .or_else(|| Some(create_macos_app_menu(config, &about)));
+                #[cfg(not(target_os = "macos"))]
+                let app_menu = built.app_menu;
+                if let Some(app_menu) = app_menu {
+                    let _ = built.menu.prepend(&app_menu);
+                }
                 attach_menu_to_window(&built.menu, window);
                 if let Ok(mut map) = menu_id_map.lock() {
                     map.extend(built.id_map);
@@ -566,7 +589,7 @@ fn dispatch_command(
             }
         }
         RustinoCommand::ShowContextMenu(json, pos) => {
-            if let Some(built) = menu::build_menu(&json) {
+            if let Some(built) = menu::build_menu(&json, &about_metadata(config)) {
                 if let Ok(mut map) = menu_id_map.lock() {
                     map.extend(built.id_map);
                 }
@@ -581,7 +604,7 @@ fn dispatch_command(
                     builder = builder.with_tooltip(tooltip);
                 }
                 if let Some(ref menu_json) = params.menu_json {
-                    if let Some(built) = menu::build_menu(menu_json) {
+                    if let Some(built) = menu::build_menu(menu_json, &about_metadata(config)) {
                         if let Ok(mut map) = menu_id_map.lock() {
                             map.extend(built.id_map);
                         }
@@ -625,35 +648,12 @@ fn dispatch_command(
 // --- Menu platform helpers ---
 
 #[cfg(target_os = "macos")]
-pub(crate) fn create_default_macos_menu(config: &crate::config::WindowConfig) -> muda::Menu {
+pub(crate) fn create_default_macos_menu(
+    config: &crate::config::WindowConfig,
+    about: &muda::AboutMetadata,
+) -> muda::Menu {
     let default_menu = muda::Menu::new();
-
-    let app_menu = muda::Submenu::new("App", true);
-
-    let metadata = muda::AboutMetadata {
-        name: config.about_name.clone().or_else(|| Some(config.title.clone())),
-        version: config.about_version.clone(),
-        copyright: config.about_copyright.clone(),
-        website: config.about_website.clone(),
-        license: config.about_license.clone(),
-        authors: if config.about_authors.is_empty() {
-            None
-        } else {
-            Some(config.about_authors.clone())
-        },
-        comments: config.about_comments.clone(),
-        ..Default::default()
-    };
-
-    let menu_label = config.about_name.as_deref().unwrap_or(&config.title);
-    let _ = app_menu.append(&muda::PredefinedMenuItem::about(
-        Some(&format!("About {menu_label}")),
-        Some(metadata),
-    ));
-
-    let _ = app_menu.append(&muda::PredefinedMenuItem::separator());
-    let _ = app_menu.append(&muda::PredefinedMenuItem::quit(None));
-    let _ = default_menu.append(&app_menu);
+    let _ = default_menu.append(&create_macos_app_menu(config, about));
 
     let edit_menu = muda::Submenu::new("Edit", true);
     let _ = edit_menu.append(&muda::PredefinedMenuItem::undo(None));
@@ -668,11 +668,69 @@ pub(crate) fn create_default_macos_menu(config: &crate::config::WindowConfig) ->
     default_menu
 }
 
+/// Standard macOS application menu: About, Hide, Hide Others, Show All, Quit.
+#[cfg(target_os = "macos")]
+pub(crate) fn create_macos_app_menu(
+    config: &crate::config::WindowConfig,
+    about: &muda::AboutMetadata,
+) -> muda::Submenu {
+    let app_menu = muda::Submenu::new("App", true);
+
+    // Without SetAboutName, muda and AppKit use the app name shown in the menu bar
+    let name = config.about_name.as_deref();
+    let label = |action: &str| name.map(|name| format!("{action} {name}"));
+    let (about_label, hide, quit) = (label("About"), label("Hide"), label("Quit"));
+
+    let _ = app_menu.append(&muda::PredefinedMenuItem::about(
+        about_label.as_deref(),
+        Some(about.clone()),
+    ));
+    let _ = app_menu.append(&muda::PredefinedMenuItem::separator());
+    let _ = app_menu.append(&muda::PredefinedMenuItem::hide(hide.as_deref()));
+    let _ = app_menu.append(&muda::PredefinedMenuItem::hide_others(None));
+    let _ = app_menu.append(&muda::PredefinedMenuItem::show_all(None));
+    let _ = app_menu.append(&muda::PredefinedMenuItem::separator());
+    let _ = app_menu.append(&muda::PredefinedMenuItem::quit(quit.as_deref()));
+
+    app_menu
+}
+
+/// Metadata for the predefined About item, from the SetAbout* values and the window icon.
+fn about_metadata(config: &crate::config::WindowConfig) -> muda::AboutMetadata {
+    let authors = (!config.about_authors.is_empty()).then(|| config.about_authors.clone());
+    // macOS's About panel ignores comments, authors, website and license: show them as credits
+    let credits = [
+        config.about_comments.clone(),
+        authors.as_ref().map(|a| a.join(", ")),
+        config.about_website.clone(),
+        config.about_license.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    muda::AboutMetadata {
+        name: config.about_name.clone(),
+        version: config.about_version.clone(),
+        copyright: config.about_copyright.clone(),
+        website: config.about_website.clone(),
+        license: config.about_license.clone(),
+        authors,
+        comments: config.about_comments.clone(),
+        credits: (!credits.is_empty()).then_some(credits),
+        // Without an explicit icon, an unbundled app shows its folder icon
+        icon: config.icon_file.as_deref().and_then(icon::load_menu_icon),
+        ..Default::default()
+    }
+}
+
 fn attach_menu_to_window(menu: &muda::Menu, _window: &tao::window::Window) {
     #[cfg(target_os = "windows")]
     {
         use tao::platform::windows::WindowExtWindows;
         unsafe { let _ = menu.init_for_hwnd(_window.hwnd() as _); }
+        crate::accelerators::set_menu(_window.hwnd(), Some(menu));
     }
     #[cfg(target_os = "macos")]
     {
@@ -690,6 +748,7 @@ fn remove_menu_from_window(menu: &muda::Menu, _window: &tao::window::Window) {
     {
         use tao::platform::windows::WindowExtWindows;
         unsafe { let _ = menu.remove_for_hwnd(_window.hwnd() as _); }
+        crate::accelerators::set_menu(_window.hwnd(), None);
     }
     #[cfg(target_os = "macos")]
     {
@@ -991,7 +1050,7 @@ mod tests {
     fn test_create_default_macos_menu() {
         let mut config = crate::config::WindowConfig::default();
         config.title = "Test App".to_string();
-        let menu = super::create_default_macos_menu(&config);
+        let menu = super::create_default_macos_menu(&config, &super::about_metadata(&config));
         let items = menu.items();
         assert_eq!(items.len(), 2, "Menu should have exactly 2 submenus (App and Edit)");
     }
@@ -1009,7 +1068,7 @@ mod tests {
         config.about_license = Some("MIT".to_string());
         config.about_authors = vec!["Alice".to_string(), "Bob".to_string()];
         config.about_comments = Some("A test application".to_string());
-        let menu = super::create_default_macos_menu(&config);
+        let menu = super::create_default_macos_menu(&config, &super::about_metadata(&config));
         let items = menu.items();
         assert_eq!(items.len(), 2, "Menu should have exactly 2 submenus (App and Edit)");
     }

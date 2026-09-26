@@ -22,19 +22,31 @@ var window = new RustinoWindow();
 
 // --- Application menu bar ---
 var appMenu = new RustinoMenu()
+    .AddAppMenu(app => app // macOS only
+        .AddPredefinedItem(PredefinedMenuItem.About)
+        .AddSeparator()
+        .AddItem("settings", "Settings…", accelerator: "CmdOrCtrl+,")
+        .AddSeparator()
+        .AddPredefinedItem(PredefinedMenuItem.Hide)
+        .AddPredefinedItem(PredefinedMenuItem.Quit))
     .AddSubmenu("File", file => file
         .AddItem("new", "New", accelerator: "CmdOrCtrl+N")
         .AddItem("open", "Open...", accelerator: "CmdOrCtrl+O")
         .AddItem("save", "Save", accelerator: "CmdOrCtrl+S")
         .AddSeparator()
         .AddItem("exit", "Exit", accelerator: "Alt+F4"))
-    .AddSubmenu("Edit", edit => edit
-        .AddItem("undo", "Undo", accelerator: "CmdOrCtrl+Z")
-        .AddItem("redo", "Redo", accelerator: "CmdOrCtrl+Y")
-        .AddSeparator()
-        .AddItem("cut", "Cut", accelerator: "CmdOrCtrl+X")
-        .AddItem("copy", "Copy", accelerator: "CmdOrCtrl+C")
-        .AddItem("paste", "Paste", accelerator: "CmdOrCtrl+V"))
+    .AddSubmenu("Edit", edit =>
+    {
+        // Undo/Redo are not available on Linux
+        if (!OperatingSystem.IsLinux())
+            edit.AddPredefinedItem(PredefinedMenuItem.Undo)
+                .AddPredefinedItem(PredefinedMenuItem.Redo)
+                .AddSeparator();
+        edit.AddPredefinedItem(PredefinedMenuItem.Cut)
+            .AddPredefinedItem(PredefinedMenuItem.Copy)
+            .AddPredefinedItem(PredefinedMenuItem.Paste)
+            .AddPredefinedItem(PredefinedMenuItem.SelectAll);
+    })
     .AddSubmenu("View", view => view
         .AddCheckItem("sidebar", "Show Sidebar", isChecked: true)
         .AddCheckItem("statusbar", "Show Status Bar", isChecked: true)
@@ -273,6 +285,11 @@ window
     .SetLogger(logger)
     .SetTitle("Rustino — Feature Showcase")
     .SetIconFile(iconPath)
+    .SetAboutName("Rustino Showcase")
+    .SetAboutVersion("1.0")
+    .SetAboutCopyright("MIT License")
+    .SetAboutComments("Native desktop windows with embedded web views, powered by Rust.")
+    .SetAboutWebsite("https://github.com/Ivy-Interactive/Rustino")
     .SetUseOsDefaultSize(false)
     .SetSize(1100, 800)
     .SetMinSize(600, 400)

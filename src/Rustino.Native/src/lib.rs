@@ -3,6 +3,8 @@
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::unnecessary_map_or)]
 
+#[cfg(target_os = "windows")]
+mod accelerators;
 mod callbacks;
 mod commands;
 mod config;
@@ -19,7 +21,7 @@ use std::panic::catch_unwind;
 use std::sync::atomic::Ordering;
 
 use commands::RustinoCommand;
-use config::{RustinoInitParams, WindowConfig};
+use config::{AboutField, RustinoInitParams, WindowConfig};
 use window::RustinoWindow;
 
 // ---------------------------------------------------------------------------
@@ -245,69 +247,50 @@ pub unsafe extern "C" fn rustino_center(instance: *mut RustinoWindow) {
     });
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rustino_set_about_name(instance: *mut RustinoWindow, name: *const c_char) {
+fn set_about(instance: *mut RustinoWindow, field: AboutField, value: *const c_char) {
     let _ = catch_unwind(|| {
         if let Some(inst) = unsafe { instance.as_mut() } {
-            inst.config.about_name = unsafe { util::cstr_to_string(name) };
+            let v = unsafe { util::cstr_to_string(value) };
+            if !inst.send_command(RustinoCommand::SetAbout(field, v.clone())) {
+                inst.config.set_about(field, v);
+            }
         }
     });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_about_name(instance: *mut RustinoWindow, name: *const c_char) {
+    set_about(instance, AboutField::Name, name);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_about_version(instance: *mut RustinoWindow, version: *const c_char) {
-    let _ = catch_unwind(|| {
-        if let Some(inst) = unsafe { instance.as_mut() } {
-            inst.config.about_version = unsafe { util::cstr_to_string(version) };
-        }
-    });
+    set_about(instance, AboutField::Version, version);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_about_copyright(instance: *mut RustinoWindow, copyright: *const c_char) {
-    let _ = catch_unwind(|| {
-        if let Some(inst) = unsafe { instance.as_mut() } {
-            inst.config.about_copyright = unsafe { util::cstr_to_string(copyright) };
-        }
-    });
+    set_about(instance, AboutField::Copyright, copyright);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_about_website(instance: *mut RustinoWindow, website: *const c_char) {
-    let _ = catch_unwind(|| {
-        if let Some(inst) = unsafe { instance.as_mut() } {
-            inst.config.about_website = unsafe { util::cstr_to_string(website) };
-        }
-    });
+    set_about(instance, AboutField::Website, website);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_about_license(instance: *mut RustinoWindow, license: *const c_char) {
-    let _ = catch_unwind(|| {
-        if let Some(inst) = unsafe { instance.as_mut() } {
-            inst.config.about_license = unsafe { util::cstr_to_string(license) };
-        }
-    });
+    set_about(instance, AboutField::License, license);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_about_authors(instance: *mut RustinoWindow, authors: *const c_char) {
-    let _ = catch_unwind(|| {
-        if let Some(inst) = unsafe { instance.as_mut() } {
-            inst.config.about_authors = unsafe { util::cstr_to_string(authors) }
-                .map(|s| s.lines().map(|l| l.to_string()).collect())
-                .unwrap_or_default();
-        }
-    });
+    set_about(instance, AboutField::Authors, authors);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_about_comments(instance: *mut RustinoWindow, comments: *const c_char) {
-    let _ = catch_unwind(|| {
-        if let Some(inst) = unsafe { instance.as_mut() } {
-            inst.config.about_comments = unsafe { util::cstr_to_string(comments) };
-        }
-    });
+    set_about(instance, AboutField::Comments, comments);
 }
 
 #[unsafe(no_mangle)]

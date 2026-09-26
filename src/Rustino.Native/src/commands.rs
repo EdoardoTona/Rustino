@@ -1,5 +1,7 @@
 use std::sync::mpsc;
 
+use crate::config::AboutField;
+
 #[derive(Debug)]
 pub enum RustinoCommand {
     SetTitle(String),
@@ -17,6 +19,7 @@ pub enum RustinoCommand {
     SetResizable(bool),
     SetTopmost(bool),
     SetIconFile(String),
+    SetAbout(AboutField, Option<String>),
 
     EvaluateScript(String),
     SendWebMessage(String),

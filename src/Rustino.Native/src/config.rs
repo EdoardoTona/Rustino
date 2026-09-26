@@ -116,7 +116,35 @@ impl Default for WindowConfig {
     }
 }
 
+/// Field changed by SetAbout*, applied before or after the event loop starts.
+#[derive(Debug, Clone, Copy)]
+pub enum AboutField {
+    Name,
+    Version,
+    Copyright,
+    Website,
+    License,
+    Authors,
+    Comments,
+}
+
 impl WindowConfig {
+    pub fn set_about(&mut self, field: AboutField, value: Option<String>) {
+        match field {
+            AboutField::Name => self.about_name = value,
+            AboutField::Version => self.about_version = value,
+            AboutField::Copyright => self.about_copyright = value,
+            AboutField::Website => self.about_website = value,
+            AboutField::License => self.about_license = value,
+            AboutField::Comments => self.about_comments = value,
+            AboutField::Authors => {
+                self.about_authors = value
+                    .map(|s| s.lines().map(str::to_string).collect())
+                    .unwrap_or_default()
+            }
+        }
+    }
+
     pub fn from_params(params: &RustinoInitParams) -> Self {
         use crate::util::cstr_to_string;
 
@@ -306,6 +334,17 @@ mod tests {
         assert_eq!(config.about_license.as_deref(), Some("MIT"));
         assert_eq!(config.about_authors, vec!["Alice", "Bob", "Charlie"]);
         assert_eq!(config.about_comments.as_deref(), Some("A test application"));
+    }
+
+    #[test]
+    fn set_about_updates_fields() {
+        let mut config = WindowConfig::default();
+        config.set_about(AboutField::Version, Some("2.0".into()));
+        config.set_about(AboutField::Authors, Some("Alice\nBob".into()));
+        assert_eq!(config.about_version.as_deref(), Some("2.0"));
+        assert_eq!(config.about_authors, vec!["Alice", "Bob"]);
+        config.set_about(AboutField::Authors, None);
+        assert!(config.about_authors.is_empty());
     }
 
     #[test]
