@@ -22,10 +22,16 @@ internal delegate void IntCallback(IntPtr context, int value);
 internal delegate void StringCallback(IntPtr context, IntPtr message);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void WebMessageCallback(IntPtr context, IntPtr message, IntPtr sourceUrl);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 internal delegate void PageLoadCallback(IntPtr context, int eventType, IntPtr url);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 internal delegate int NavigationCallback(IntPtr context, IntPtr url);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void CustomSchemeCallback(IntPtr context, IntPtr url, IntPtr response);
 
 internal static class RustinoDllImports
 {
@@ -174,6 +180,20 @@ internal static class RustinoDllImports
         IntPtr instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string js);
 
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_add_custom_scheme(
+        IntPtr instance,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string scheme);
+
+    // --- Custom scheme response (called from within the custom scheme callback) ---
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_scheme_response(
+        IntPtr response,
+        byte[] data,
+        int length,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? contentType);
+
     // --- Window state ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
@@ -320,7 +340,7 @@ internal static class RustinoDllImports
     internal static extern void rustino_set_focus_changed_handler(IntPtr instance, IntCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_web_message_received_handler(IntPtr instance, StringCallback handler);
+    internal static extern void rustino_set_web_message_received_handler(IntPtr instance, WebMessageCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_page_load_handler(IntPtr instance, PageLoadCallback handler);
@@ -333,6 +353,9 @@ internal static class RustinoDllImports
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_tray_icon_event_handler(IntPtr instance, VoidContextCallback handler);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_custom_scheme_handler(IntPtr instance, CustomSchemeCallback handler);
 
     // --- Splashscreen ---
 

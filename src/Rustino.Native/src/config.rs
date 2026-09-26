@@ -61,6 +61,7 @@ pub struct WindowConfig {
     pub media_autoplay: bool,
     pub zoom_hotkeys: bool,
     pub initialization_scripts: Vec<String>,
+    pub custom_schemes: Vec<String>,
 
     pub about_name: Option<String>,
     pub about_version: Option<String>,
@@ -105,6 +106,7 @@ impl Default for WindowConfig {
             media_autoplay: true,
             zoom_hotkeys: false,
             initialization_scripts: Vec::new(),
+            custom_schemes: Vec::new(),
             about_name: None,
             about_version: None,
             about_copyright: None,
@@ -249,6 +251,7 @@ mod tests {
         assert!(config.media_autoplay);
         assert!(!config.zoom_hotkeys);
         assert!(config.initialization_scripts.is_empty());
+        assert!(config.custom_schemes.is_empty());
     }
 
     #[test]

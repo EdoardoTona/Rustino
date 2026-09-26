@@ -79,6 +79,7 @@ All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the sa
 | `SetUserAgent(string)` | Set custom user agent string |
 | `SetUserDataFolder(string)` | Set webview data folder path |
 | `AddInitScript(string)` | Add JavaScript to run before page loads |
+| `RegisterCustomSchemeHandler(string, handler)` | Serve `scheme://` requests from .NET (see [Custom Schemes](#custom-schemes)) |
 | `Load(Uri)` / `Load(string)` | Navigate to a URL or local file |
 | `LogVerbosity` | Set log verbosity (0 = silent) |
 
@@ -100,6 +101,21 @@ All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the sa
 | `ClearBadge()` | Remove the taskbar/dock badge |
 | `WaitForClose()` | Block until the window is closed |
 | `Dispose()` | Release native resources (`RustinoWindow` implements `IDisposable`) |
+
+### Custom Schemes
+
+Serve content for a custom URL scheme directly from .NET (same signature as Photino). Register handlers before `WaitForClose()`; returning `null` produces a 404:
+
+```csharp
+window.RegisterCustomSchemeHandler("app", (sender, scheme, url, out contentType) =>
+{
+    contentType = "text/html";
+    return new MemoryStream("<h1>Hello from .NET</h1>"u8.ToArray());
+});
+window.Load("app://localhost/");
+```
+
+On Windows, WebView2 sees custom schemes as `http://<scheme>.localhost/`; handlers still receive the original `<scheme>://...` URLs.
 
 ### Dialogs
 
@@ -275,6 +291,7 @@ window.SetPosition(
 | `LocationChanged` | `PointEventArgs` | Fired on move (`.X`, `.Y`) |
 | `FocusChanged` | `bool` | Fired on focus/blur |
 | `WebMessageReceived` | `string` | Fired when JS calls `window.ipc.postMessage(msg)` |
+| `WebMessageReceivedWithSource` | `WebMessageEventArgs` | Same messages with the sending page's URL (`.Message`, `.SourceUrl`): check it if the webview can navigate to other sites |
 | `PageLoaded` | `PageLoadEventArgs` | Fired on page load start/finish (`.IsStarted`, `.Url`) |
 | `Navigating` | `NavigationEventArgs` | Fired before navigation (`.Url`, set `Cancel = true` to block) |
 | `MenuItemClicked` | `string` | Fired when a menu item is clicked (the item's ID) |
@@ -290,6 +307,7 @@ All events are also available as `IObservable<T>` properties for reactive progra
 | `WhenLocationChanged` | `IObservable<(int X, int Y)>` | Position change stream |
 | `WhenFocusChanged` | `IObservable<bool>` | Focus/blur stream |
 | `WhenWebMessageReceived` | `IObservable<string>` | JS message stream |
+| `WhenWebMessageReceivedWithSource` | `IObservable<WebMessageEventArgs>` | JS message stream with the sending page's URL |
 | `WhenPageLoaded` | `IObservable<PageLoadEventArgs>` | Page load stream |
 | `WhenNavigating` | `IObservable<NavigationEventArgs>` | Navigation stream |
 | `WhenWindowClosed` | `IObservable<EventArgs>` | Window closed stream |
