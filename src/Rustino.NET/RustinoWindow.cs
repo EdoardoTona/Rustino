@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Rustino.NET;
 
-public class RustinoWindow : IDisposable
+public partial class RustinoWindow : IDisposable
 {
     private IntPtr _nativeHandle;
     private int _disposed;
@@ -870,6 +870,7 @@ public class RustinoWindow : IDisposable
                 RustinoDllImports.rustino_set_transparent(_nativeHandle, 1);
             if (!_decorations)
                 RustinoDllImports.rustino_set_decorations(_nativeHandle, 0);
+            ApplyExtConfiguration();
             if (!_visible)
                 RustinoDllImports.rustino_set_visible(_nativeHandle, 0);
             if (_maximized)
@@ -921,6 +922,7 @@ public class RustinoWindow : IDisposable
         RustinoDllImports.rustino_set_resized_handler(_nativeHandle, ResizedCb);
         RustinoDllImports.rustino_set_moved_handler(_nativeHandle, MovedCb);
         RustinoDllImports.rustino_set_focus_changed_handler(_nativeHandle, FocusCb);
+        RegisterExtCallbacks();
         RustinoDllImports.rustino_set_web_message_received_handler(_nativeHandle, WebMsgCb);
         RustinoDllImports.rustino_set_page_load_handler(_nativeHandle, PageLoadCb);
         RustinoDllImports.rustino_set_navigation_handler(_nativeHandle, NavCb);
@@ -1079,6 +1081,7 @@ public class RustinoWindow : IDisposable
     private static void CompleteAllObservables(RustinoWindow w)
     {
         w._sizeChangedObs.Complete();
+        CompleteExtObservables(w);
         w._locationChangedObs.Complete();
         w._focusChangedObs.Complete();
         w._webMessageObs.Complete();

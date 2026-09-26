@@ -14,6 +14,7 @@ mod splash;
 mod state;
 mod util;
 mod window;
+mod window_ext;
 
 use std::ffi::c_void;
 use std::os::raw::c_char;
@@ -1081,6 +1082,245 @@ pub unsafe extern "C" fn rustino_get_current_monitor(instance: *mut RustinoWindo
     .ok()
     .flatten()
     .unwrap_or(std::ptr::null_mut())
+}
+
+// ---------------------------------------------------------------------------
+// Window features (see window_ext)
+// ---------------------------------------------------------------------------
+
+/// Sends a window feature command to the running window; before it runs, `store` keeps the
+/// setting in the options.
+unsafe fn set_window_feature(
+    instance: *mut RustinoWindow,
+    command: window_ext::WindowCommand,
+    store: impl FnOnce(&mut window_ext::WindowExtOptions),
+) {
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(inst) = unsafe { instance.as_mut() }
+            && !inst.send_command(RustinoCommand::Window(command))
+        {
+            store(&mut inst.ext.options);
+        }
+    }));
+}
+
+/// Sends a window feature command that needs a running window.
+unsafe fn run_window_feature(instance: *mut RustinoWindow, command: window_ext::WindowCommand) {
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(inst) = unsafe { instance.as_ref() } {
+            inst.send_command(RustinoCommand::Window(command));
+        }
+    }));
+}
+
+/// 0 follows the system, 1 light, 2 dark
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_theme(instance: *mut RustinoWindow, theme: i32) {
+    let theme = window_ext::theme_from_i32(theme);
+    unsafe { set_window_feature(instance, window_ext::WindowCommand::SetTheme(theme), |o| o.theme = theme) };
+}
+
+/// 1 light, 2 dark, 0 before the window runs
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_get_theme(instance: *mut RustinoWindow) -> i32 {
+    catch_unwind(|| unsafe { instance.as_ref() }.map_or(0, |inst| i32::from(inst.state.load_theme())))
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_get_scale_factor(instance: *mut RustinoWindow) -> f64 {
+    catch_unwind(|| unsafe { instance.as_ref() }.map_or(1.0, |inst| inst.state.load_scale_factor()))
+        .unwrap_or(1.0)
+}
+
+/// `state`: 0 none, 1 normal, 2 indeterminate, 3 paused, 4 error. `progress`: 0-100, negative
+/// keeps the current value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_progress_bar(instance: *mut RustinoWindow, state: i32, progress: i32) {
+    let state = window_ext::progress_state_from_i32(state);
+    let progress = u64::try_from(progress).ok();
+    unsafe { run_window_feature(instance, window_ext::WindowCommand::SetProgressBar(state, progress)) };
+}
+
+/// 0 cancels the request, 1 informational, 2 critical
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_request_user_attention(instance: *mut RustinoWindow, kind: i32) {
+    let kind = window_ext::attention_from_i32(kind);
+    unsafe { run_window_feature(instance, window_ext::WindowCommand::RequestUserAttention(kind)) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_shadow(instance: *mut RustinoWindow, shadow: i32) {
+    let v = shadow != 0;
+    unsafe { set_window_feature(instance, window_ext::WindowCommand::SetShadow(v), |o| o.shadow = Some(v)) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_skip_taskbar(instance: *mut RustinoWindow, skip: i32) {
+    let v = skip != 0;
+    unsafe { set_window_feature(instance, window_ext::WindowCommand::SetSkipTaskbar(v), |o| o.skip_taskbar = v) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_content_protection(instance: *mut RustinoWindow, enabled: i32) {
+    let v = enabled != 0;
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetContentProtection(v), |o| {
+            o.content_protection = v
+        })
+    };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_visible_on_all_workspaces(instance: *mut RustinoWindow, visible: i32) {
+    let v = visible != 0;
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetVisibleOnAllWorkspaces(v), |o| {
+            o.visible_on_all_workspaces = v
+        })
+    };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_closable(instance: *mut RustinoWindow, closable: i32) {
+    let v = closable != 0;
+    unsafe { set_window_feature(instance, window_ext::WindowCommand::SetClosable(v), |o| o.closable = v) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_minimizable(instance: *mut RustinoWindow, minimizable: i32) {
+    let v = minimizable != 0;
+    unsafe { set_window_feature(instance, window_ext::WindowCommand::SetMinimizable(v), |o| o.minimizable = v) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_maximizable(instance: *mut RustinoWindow, maximizable: i32) {
+    let v = maximizable != 0;
+    unsafe { set_window_feature(instance, window_ext::WindowCommand::SetMaximizable(v), |o| o.maximizable = v) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_always_on_bottom(instance: *mut RustinoWindow, on_bottom: i32) {
+    let v = on_bottom != 0;
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetAlwaysOnBottom(v), |o| o.always_on_bottom = v)
+    };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_ignore_cursor_events(instance: *mut RustinoWindow, ignore: i32) {
+    let v = ignore != 0;
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetIgnoreCursorEvents(v), |o| {
+            o.ignore_cursor_events = v
+        })
+    };
+}
+
+/// Pre-run only, ignored once the window runs. 0 default, 1 transparent, 2 overlay (see
+/// `MacTitleBarStyle`)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_mac_title_bar_style(instance: *mut RustinoWindow, style: i32) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() }
+            && inst.proxy.read().is_ok_and(|proxy| proxy.is_none())
+        {
+            inst.ext.options.mac_title_bar_style = window_ext::MacTitleBarStyle::from_i32(style);
+        }
+    });
+}
+
+/// Pre-run only, ignored once the window runs. Without drag regions no page can move, resize or
+/// maximize the window through the `__rustino:` messages, which reach the host instead.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_drag_regions_enabled(instance: *mut RustinoWindow, enabled: i32) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() }
+            && inst.proxy.read().is_ok_and(|proxy| proxy.is_none())
+        {
+            inst.ext.options.drag_regions = enabled != 0;
+        }
+    });
+}
+
+/// Position of the macOS traffic lights, in logical pixels from the top-left corner
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_traffic_light_position(instance: *mut RustinoWindow, x: f64, y: f64) {
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetTrafficLightPosition(x, y), |o| {
+            o.traffic_light_position = Some((x, y))
+        })
+    };
+}
+
+/// Linux: the `.desktop` file of the app, whose dock icon shows the badge and the progress
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_desktop_file_name(instance: *mut RustinoWindow, name: *const c_char) {
+    let name = unsafe { util::cstr_to_string(name) };
+    let command = window_ext::WindowCommand::SetDesktopFileName(name.clone());
+    unsafe { set_window_feature(instance, command, |o| o.desktop_file_name = name) };
+}
+
+/// Moves the window with the mouse: call it while the left button is down.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_drag_window(instance: *mut RustinoWindow) {
+    unsafe { run_window_feature(instance, window_ext::WindowCommand::DragWindow) };
+}
+
+/// Resizes the window with the mouse from an edge: 0 north, then clockwise to 7 north-west
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_drag_resize_window(instance: *mut RustinoWindow, direction: i32) {
+    if let Some(direction) = window_ext::direction_from_i32(direction) {
+        unsafe { run_window_feature(instance, window_ext::WindowCommand::DragResizeWindow(direction)) };
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_theme_changed_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, i32)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.ext.callbacks.on_theme_changed = handler;
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_scale_factor_changed_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, f64, i32, i32)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.ext.callbacks.on_scale_factor_changed = handler;
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_urls_opened_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.ext.callbacks.on_urls_opened = handler;
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_reopen_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, i32)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.ext.callbacks.on_reopen = handler;
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

@@ -127,6 +127,30 @@ window.WhenWebMessageWithPrefix("cmd:")
 window.WhenWindowClosed
     .Subscribe(_ => Console.WriteLine("[Reactive] Window closed"));
 
+// --- Native window features ---
+window.ThemeChanged += (_, theme) =>
+{
+    Console.WriteLine($"[Event] ThemeChanged: {theme}");
+    window.ExecuteScript($"showTheme('{theme}')");
+};
+window.ScaleFactorChanged += (_, a) =>
+    Console.WriteLine($"[Event] ScaleFactorChanged: {a.ScaleFactor} ({a.Width}x{a.Height})");
+window.UrlsOpened += (_, urls) => Log($"Opened: {string.Join(", ", urls)}");
+// macOS: a click on the Dock icon brings back the window hidden in the tray
+window.Reopened += (_, hasVisibleWindows) =>
+{
+    Console.WriteLine($"[Event] Reopened (visible windows: {hasVisibleWindows})");
+    if (!hasVisibleWindows) window.SetVisible(true).Focus();
+};
+
+// macOS: the tab bar takes the place of the title bar, next to the traffic lights
+if (OperatingSystem.IsMacOS())
+{
+    window.SetMacTitleBarStyle(MacTitleBarStyle.Overlay)
+        .SetMacTrafficLightPosition(14, 12)
+        .AddInitScript("document.documentElement.style.setProperty('--titlebar-inset', '80px');");
+}
+
 // --- Menu clicks ---
 window.MenuItemClicked += (_, id) =>
 {
@@ -198,6 +222,11 @@ void HandleMessage(string msg)
             break;
         case "get-time":
             Log($"Server time: {DateTime.Now:HH:mm:ss}");
+            break;
+
+        // Native window features
+        case var native when native.StartsWith("native:"):
+            HandleNativeMessage(native["native:".Length..]);
             break;
 
         // Badges
@@ -323,6 +352,45 @@ void HandleMessage(string msg)
     }
 }
 
+void HandleNativeMessage(string msg)
+{
+    var parts = msg.Split(':');
+    var on = parts.Length > 1 && parts[1] == "1";
+    switch (parts[0])
+    {
+        case "theme":
+            window.SetTheme(Enum.Parse<WindowTheme>(parts[1]));
+            break;
+        case "progress":
+            var state = Enum.Parse<ProgressBarState>(parts[1]);
+            int? value = parts.Length > 2 ? int.Parse(parts[2]) : null;
+            window.SetProgressBar(state, value);
+            break;
+        case "attention":
+            // No effect while the app is focused: switch to another app within 3 seconds
+            var type = Enum.Parse<UserAttentionType>(parts[1]);
+            Log($"Requesting attention ({type}) in 3 s: switch to another app");
+            Task.Delay(3000).ContinueWith(_ => window.RequestUserAttention(type));
+            break;
+        case "click-through":
+            Log("The window ignores the mouse for 5 s");
+            window.SetIgnoreCursorEvents(true);
+            Task.Delay(5000).ContinueWith(_ => window.SetIgnoreCursorEvents(false));
+            break;
+        case "shadow": window.SetShadow(on); break;
+        case "skip-taskbar": window.SetSkipTaskbar(on); break;
+        case "content-protection": window.SetContentProtection(on); break;
+        case "all-workspaces": window.SetVisibleOnAllWorkspaces(on); break;
+        case "closable": window.SetClosable(on); break;
+        case "minimizable": window.SetMinimizable(on); break;
+        case "maximizable": window.SetMaximizable(on); break;
+        case "always-on-bottom": window.SetAlwaysOnBottom(on); break;
+        case "info":
+            Log($"Theme: {window.Theme}, scale factor: {window.ScaleFactor}");
+            break;
+    }
+}
+
 void Log(string text)
 {
     var escaped = JsonSerializer.Serialize(text);
@@ -376,7 +444,7 @@ static string Html() => """
       body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
       /* Tab bar */
-      .tabs { display: flex; background: #16213e; border-bottom: 1px solid #333; padding: 0 8px; flex-shrink: 0; }
+      .tabs { display: flex; background: #16213e; border-bottom: 1px solid #333; padding: 0 8px 0 var(--titlebar-inset, 8px); flex-shrink: 0; }
       .tab { padding: 10px 18px; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: #888; border-bottom: 2px solid transparent; transition: all 0.15s; user-select: none; }
       .tab:hover { color: #ccc; }
       .tab.active { color: #00d4ff; border-bottom-color: #00d4ff; }
@@ -401,6 +469,7 @@ static string Html() => """
       .p { background: #a855f7; color: white; }
       .o { background: #2d2d4e; color: #e0e0e0; }
       .o:hover { background: #3d3d6e; }
+      .flag { display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; background: #2d2d4e; border-radius: 5px; font-size: 0.82rem; cursor: pointer; }
       input[type="text"] { padding: 7px 10px; border: 1px solid #333; border-radius: 5px; background: #0f3460; color: #e0e0e0; font-size: 0.85rem; width: 250px; }
 
       /* Log */
@@ -430,7 +499,8 @@ static string Html() => """
     <body>
 
     <!-- Tab bar -->
-    <div class="tabs">
+    <!-- The empty part of the tab bar drags the window (the tabs are children: they stay clickable) -->
+    <div class="tabs" data-rustino-drag-region>
       <div class="tab active" data-tab="window">Window</div>
       <div class="tab" data-tab="interop">JS Interop</div>
       <div class="tab" data-tab="dialogs">Dialogs</div>
@@ -440,6 +510,7 @@ static string Html() => """
       <div class="tab" data-tab="monitors">Monitors</div>
       <div class="tab" data-tab="reactive">Reactive</div>
       <div class="tab" data-tab="voice">Voice Test</div>
+      <div class="tab" data-tab="native">Native</div>
     </div>
 
     <div class="panels">
@@ -668,6 +739,63 @@ static string Html() => """
           <p id="mic-status" style="margin-top:12px;color:#888;font-size:0.85rem">Click the button to request microphone access.</p>
         </div>
       </div>
+
+      <!-- NATIVE -->
+      <div class="panel" id="tab-native">
+        <h2>Native Window Features</h2>
+        <div class="card">
+          <h3>Theme</h3>
+          <div class="row">
+            <button class="b" onclick="send('native:theme:System')">System</button>
+            <button class="o" onclick="send('native:theme:Light')">Light</button>
+            <button class="o" onclick="send('native:theme:Dark')">Dark</button>
+            <button class="g" onclick="send('native:info')">Theme & Scale Factor</button>
+          </div>
+          <p style="color:#888;font-size:0.78rem;margin-top:8px">Title bar and native controls follow the theme; the page sees it through prefers-color-scheme: <b id="color-scheme"></b>. Last ThemeChanged: <b id="theme-event">—</b></p>
+        </div>
+        <div class="card">
+          <h3>Taskbar / Dock Progress</h3>
+          <div class="row">
+            <button class="g" onclick="send('native:progress:Normal:25')">25%</button>
+            <button class="g" onclick="send('native:progress:Normal:60')">60%</button>
+            <button class="g" onclick="send('native:progress:Normal:100')">100%</button>
+            <button class="b" onclick="send('native:progress:Indeterminate')">Indeterminate</button>
+            <button class="y" onclick="send('native:progress:Paused:60')">Paused</button>
+            <button class="r" onclick="send('native:progress:Error:60')">Error</button>
+            <button class="o" onclick="send('native:progress:None')">Clear</button>
+            <button class="p" onclick="simulateProgress()">Simulate Download</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Attention</h3>
+          <div class="row">
+            <button class="b" onclick="send('native:attention:Informational')">Informational</button>
+            <button class="r" onclick="send('native:attention:Critical')">Critical</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Chromeless Windows</h3>
+          <p style="color:#888;font-size:0.82rem;margin-bottom:8px">Make the window chromeless from the Window tab: the empty part of the tab bar (data-rustino-drag-region) moves it, a double click maximizes it and the edges resize it.</p>
+          <div class="row">
+            <button class="y" onclick="send('chromeless')">Chromeless</button>
+            <button class="y" onclick="send('decorated')">Decorated</button>
+            <label class="flag"><input type="checkbox" checked onchange="flag('shadow', this)"> Shadow</label>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Window Flags</h3>
+          <div class="row">
+            <label class="flag"><input type="checkbox" onchange="flag('skip-taskbar', this)"> Skip taskbar / Dock</label>
+            <label class="flag"><input type="checkbox" onchange="flag('content-protection', this)"> Content protection</label>
+            <label class="flag"><input type="checkbox" onchange="flag('all-workspaces', this)"> All workspaces</label>
+            <label class="flag"><input type="checkbox" onchange="flag('always-on-bottom', this)"> Always on bottom</label>
+            <label class="flag"><input type="checkbox" checked onchange="flag('closable', this)"> Closable</label>
+            <label class="flag"><input type="checkbox" checked onchange="flag('minimizable', this)"> Minimizable</label>
+            <label class="flag"><input type="checkbox" checked onchange="flag('maximizable', this)"> Maximizable</label>
+            <button class="p" onclick="send('native:click-through')">Click-through for 5 s</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Log panel -->
@@ -702,6 +830,22 @@ static string Html() => """
       }
       function clearLog() { document.getElementById('log').textContent = 'Cleared.'; }
       function toggleLog() { document.getElementById('log-bar').classList.toggle('open'); }
+
+      // Native window features
+      function flag(name, input) { send('native:' + name + ':' + (input.checked ? 1 : 0)); }
+      function showTheme(theme) { document.getElementById('theme-event').textContent = theme; }
+      const colorScheme = matchMedia('(prefers-color-scheme: dark)');
+      const showColorScheme = () => document.getElementById('color-scheme').textContent = colorScheme.matches ? 'dark' : 'light';
+      colorScheme.addEventListener('change', showColorScheme);
+      showColorScheme();
+      function simulateProgress() {
+        let p = 0;
+        const iv = setInterval(() => {
+          p += 5;
+          send(p <= 100 ? 'native:progress:Normal:' + p : 'native:progress:None');
+          if (p > 100) clearInterval(iv);
+        }, 200);
+      }
 
       // Badge
       function sendBadge(n) {
