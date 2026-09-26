@@ -13,9 +13,6 @@ use tao::window::WindowBuilder;
 use tao::platform::windows::EventLoopBuilderExtWindows;
 use wry::WebViewBuilder;
 
-#[cfg(target_os = "windows")]
-use std::sync::Mutex as StdMutex;
-
 use crate::callbacks::RustinoCallbacks;
 use crate::commands::RustinoCommand;
 use crate::config::WindowConfig;
@@ -58,7 +55,7 @@ impl RustinoWindow {
         let mut config = std::mem::take(&mut self.config);
         let callbacks = self.callbacks;
 
-        configure_webview2_args(&config);
+        warn_unsupported_settings(&config);
 
         let mut builder = EventLoopBuilder::<RustinoCommand>::with_user_event();
         #[cfg(target_os = "windows")]
@@ -155,6 +152,12 @@ impl RustinoWindow {
         }
 
         webview_builder = webview_builder.with_autoplay(config.media_autoplay);
+
+        #[cfg(target_os = "windows")]
+        if let Some(args) = webview2_browser_args(&config) {
+            use wry::WebViewBuilderExtWindows;
+            webview_builder = webview_builder.with_additional_browser_args(args);
+        }
 
         if config.zoom_hotkeys {
             webview_builder = webview_builder.with_hotkeys_zoom(true);
@@ -445,16 +448,37 @@ fn send_to_event_loops(command: impl Fn() -> RustinoCommand) {
     }
 }
 
-fn configure_webview2_args(config: &WindowConfig) {
-    #[cfg(target_os = "windows")]
-    {
-        if !config.web_security_enabled {
-            append_webview2_arg("--disable-web-security");
-        }
-        if config.ignore_certificate_errors {
-            append_webview2_arg("--ignore-certificate-errors");
-        }
+/// Browser arguments of WebView2 for the settings it has no API for; `None` keeps wry's own.
+/// They apply to this webview only (not through `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, which
+/// would reach every later window of the process). Windows sharing a user data folder need the
+/// same arguments: WebView2 refuses to create the others.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn webview2_browser_args(config: &WindowConfig) -> Option<String> {
+    let mut extra = Vec::new();
+    if !config.web_security_enabled {
+        extra.push("--disable-web-security");
     }
+    if config.ignore_certificate_errors {
+        extra.push("--ignore-certificate-errors");
+    }
+    if extra.is_empty() {
+        return None;
+    }
+    // Custom arguments replace wry's defaults (wry 0.55): its mini menu and SmartScreen off,
+    // autoplay without a user gesture
+    let mut args = String::from("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+    if config.media_autoplay {
+        args.push_str(" --autoplay-policy=no-user-gesture-required");
+    }
+    for arg in extra {
+        args.push(' ');
+        args.push_str(arg);
+    }
+    Some(args)
+}
+
+/// Settings that only WebView2 supports.
+fn warn_unsupported_settings(#[allow(unused_variables)] config: &WindowConfig) {
     #[cfg(not(target_os = "windows"))]
     {
         if !config.web_security_enabled {
@@ -475,24 +499,6 @@ fn log_warning(config: &WindowConfig, message: &str) {
         }
     } else if config.log_verbosity > 0 {
         eprintln!("{}", message);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn append_webview2_arg(arg: &str) {
-    static LOCK: StdMutex<()> = StdMutex::new(());
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let existing =
-        std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
-    if !existing.contains(arg) {
-        let new_val = if existing.is_empty() {
-            arg.to_string()
-        } else {
-            format!("{existing} {arg}")
-        };
-        unsafe {
-            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", &new_val);
-        }
     }
 }
 
@@ -1358,6 +1364,25 @@ mod tests {
         let resp = handle_custom_scheme("app://localhost/missing".to_string(), std::ptr::null_mut(), no_response_cb);
         assert_eq!(resp.status(), 404);
         assert!(resp.body().is_empty());
+    }
+
+    #[test]
+    fn webview2_browser_args_keep_wry_defaults() {
+        let mut config = crate::config::WindowConfig::default();
+        assert_eq!(super::webview2_browser_args(&config), None, "wry's own arguments");
+        config.web_security_enabled = false;
+        config.ignore_certificate_errors = true;
+        assert_eq!(
+            super::webview2_browser_args(&config).unwrap(),
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+             --autoplay-policy=no-user-gesture-required --disable-web-security --ignore-certificate-errors"
+        );
+        config.media_autoplay = false;
+        config.web_security_enabled = true;
+        assert_eq!(
+            super::webview2_browser_args(&config).unwrap(),
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --ignore-certificate-errors"
+        );
     }
 
     #[test]
