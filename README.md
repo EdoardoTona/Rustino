@@ -148,6 +148,19 @@ RustinoWindow.ShowNotification("Alert", "Something happened", stream);
 
 Uses WinRT Toast (Windows), NSUserNotification (macOS), and D-Bus (Linux).
 
+#### Windows: register your `appId`
+
+On Windows, a toast is shown under the AppUserModelID passed as `appId`. Windows only displays toasts for an id it knows (a packaged app, a Start Menu shortcut carrying the id, or a registry registration) and **silently drops** the others, while `ShowNotification` still returns `true`. Without `appId`, notifications fall back to the Windows PowerShell id and show its name and icon.
+
+Unpackaged apps (a plain `.exe`, a dotnet tool) should register their id once at startup:
+
+```csharp
+RustinoWindow.RegisterNotificationAppId("MyCompany.MyApp", "My App", iconPath: @"C:\path\to\icon.png");
+RustinoWindow.ShowNotification("Hello", "Shown as My App", appId: "MyCompany.MyApp");
+```
+
+This writes `HKCU\Software\Classes\AppUserModelId\<appId>` (display name and icon; no admin rights, no shortcut). The icon must be an image file (`.png`/`.ico`) that stays at that path. On macOS and Linux the call does nothing and returns `true`.
+
 ### Menus
 
 Native cross-platform application menus and context menus (powered by [muda](https://github.com/nicbarker/gaia)):

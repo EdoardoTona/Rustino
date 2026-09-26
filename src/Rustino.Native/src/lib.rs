@@ -166,6 +166,93 @@ mod macos_notification {
     }
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_register_notification_app_id(
+    app_id: *const c_char,
+    display_name: *const c_char,
+    icon: *const c_char,
+) -> i32 {
+    catch_unwind(|| {
+        // The id becomes a registry key name on Windows, so a backslash would nest keys.
+        let Some(app_id) = unsafe { util::cstr_to_string(app_id) }
+            .filter(|id| !id.is_empty() && !id.contains('\\'))
+        else {
+            return 0;
+        };
+        #[cfg(target_os = "windows")]
+        {
+            let display_name = unsafe { util::cstr_to_string(display_name) }
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| app_id.clone());
+            let icon_path = unsafe { util::cstr_to_string(icon) }.map(|path| {
+                std::path::absolute(&path)
+                    .map(|abs| abs.to_string_lossy().into_owned())
+                    .unwrap_or(path)
+            });
+            let registered =
+                windows_notification::register_app_id(&app_id, &display_name, icon_path.as_deref());
+            if registered { 1 } else { 0 }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (app_id, display_name, icon);
+            1
+        }
+    })
+    .unwrap_or(0)
+}
+
+// Windows silently drops toasts whose AppUserModelID it cannot resolve: it needs a
+// packaged app, a Start Menu shortcut carrying the id, or a registry registration.
+// Unpackaged apps have none of these, so we write the per-user registration that
+// Microsoft's own toolkits use for them (no shortcut, no admin rights needed).
+#[cfg(target_os = "windows")]
+mod windows_notification {
+    use windows::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
+        RegCreateKeyExW, RegSetValueExW,
+    };
+    use windows::core::{HSTRING, PCWSTR};
+
+    /// Creates (or updates) `HKCU\Software\Classes\AppUserModelId\<app_id>` with the name
+    /// and icon Windows shows in the toast header.
+    pub fn register_app_id(app_id: &str, display_name: &str, icon_path: Option<&str>) -> bool {
+        let subkey = HSTRING::from(format!(r"Software\Classes\AppUserModelId\{app_id}"));
+        let mut key = HKEY::default();
+        let created = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                &subkey,
+                None,
+                PCWSTR::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE,
+                None,
+                &mut key,
+                None,
+            )
+        };
+        if created.is_err() {
+            return false;
+        }
+        let ok = set_string(key, "DisplayName", display_name)
+            && icon_path.is_none_or(|icon| set_string(key, "IconUri", icon));
+        unsafe {
+            let _ = RegCloseKey(key);
+        }
+        ok
+    }
+
+    fn set_string(key: HKEY, name: &str, value: &str) -> bool {
+        let data: Vec<u8> = value
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        unsafe { RegSetValueExW(key, &HSTRING::from(name), None, REG_SZ, Some(&data)).is_ok() }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dual-mode setters (pre-run: modify config, post-run: send command)
 // ---------------------------------------------------------------------------

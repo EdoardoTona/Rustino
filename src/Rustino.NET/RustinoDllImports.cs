@@ -57,6 +57,12 @@ internal static class RustinoDllImports
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? icon,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId);
 
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_register_notification_app_id(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string appId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? displayName,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? iconPath);
+
     // --- Dual-mode setters ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
