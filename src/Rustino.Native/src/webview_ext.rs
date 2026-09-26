@@ -508,18 +508,125 @@ fn complete(download: Download, host: Host, proxy: EventLoopProxy<RustinoCommand
     });
 }
 
+/// Name of the temporary download folders: `rustino-download-<process id>-<random>`.
+const TEMP_FOLDER_PREFIX: &str = "rustino-download-";
+
 /// A new file in its own temporary folder, with the suggested name.
 fn temp_download_path(suggested: &Path) -> Option<PathBuf> {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let folder = std::env::temp_dir()
-        .join("rustino-downloads")
-        .join(format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    std::fs::create_dir_all(&folder).ok()?;
+    static CLEANUP: std::sync::Once = std::sync::Once::new();
+    let temp_dir = std::env::temp_dir();
+    CLEANUP.call_once(|| {
+        let temp_dir = temp_dir.clone();
+        std::thread::spawn(move || remove_stale_temp_folders(&temp_dir));
+    });
+    let folder = create_private_folder(&temp_dir)?;
     let name = suggested.file_name().map_or_else(|| "download".into(), |n| n.to_os_string());
-    let path = folder.join(name);
-    // Left by a crashed process with the same id: WKWebView doesn't overwrite files
-    let _ = std::fs::remove_file(&path);
-    Some(path)
+    Some(folder.join(name))
+}
+
+/// Creates a new folder in `parent` (often shared with the other users, like `/tmp`) that only
+/// this user can open, with an unpredictable name. The creation fails if the path exists, so
+/// nobody else can prepare the folder or a link in its place.
+fn create_private_folder(parent: &Path) -> Option<PathBuf> {
+    for _ in 0..16 {
+        let name = format!("{TEMP_FOLDER_PREFIX}{}-{:016x}{:016x}", std::process::id(), random_u64(), random_u64());
+        let folder = parent.join(name);
+        #[allow(unused_mut)]
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        match builder.create(&folder) {
+            Ok(()) => return Some(folder),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// 64 random bits: SipHash with the random keys of `RandomState`, over a counter and the time.
+fn random_u64() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    hasher.write_u128(now.map_or(0, |d| d.as_nanos()));
+    hasher.finish()
+}
+
+/// The process that created a temporary download folder, from its name.
+fn temp_folder_process(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix(TEMP_FOLDER_PREFIX)?;
+    let (pid, random) = rest.split_once('-')?;
+    (random.len() == 32 && random.bytes().all(|b| b.is_ascii_hexdigit())).then_some(())?;
+    pid.parse().ok()
+}
+
+/// Removes the temporary download folders of the processes that ended without removing them
+/// (e.g. crashed). Only the folders of this user, never through a link.
+fn remove_stale_temp_folders(temp_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(temp_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(temp_folder_process) else {
+            continue;
+        };
+        if pid == std::process::id() || process_alive(pid) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        #[cfg(unix)]
+        let mine = std::os::unix::fs::MetadataExt::uid(&metadata) == unsafe { unix::getuid() };
+        // The temporary folder of Windows is the user's
+        #[cfg(not(unix))]
+        let mine = true;
+        if metadata.is_dir() && mine {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+#[cfg(unix)]
+mod unix {
+    unsafe extern "C" {
+        pub fn getuid() -> u32;
+        pub fn kill(pid: i32, signal: i32) -> i32;
+    }
+}
+
+/// Whether a process runs. In doubt (e.g. no permission to check) it does.
+fn process_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        // Signal 0 only checks the process: EPERM means that it runs as another user
+        const ESRCH: i32 = 3;
+        let result = unsafe { unix::kill(pid, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(ESRCH)
+    }
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, STILL_ACTIVE};
+        use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        unsafe {
+            match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                Ok(process) => {
+                    let mut code = 0u32;
+                    let exited = GetExitCodeProcess(process, &mut code).is_ok() && code != STILL_ACTIVE.0 as u32;
+                    let _ = CloseHandle(process);
+                    !exited
+                }
+                Err(e) => e.code() != ERROR_INVALID_PARAMETER.to_hresult(),
+            }
+        }
+    }
 }
 
 fn remove_temp(temp: &Path) {
@@ -661,9 +768,70 @@ mod tests {
         let b = temp_download_path(Path::new("/downloads/report.pdf")).unwrap();
         assert_eq!(a.file_name().unwrap(), "report.pdf");
         assert_ne!(a.parent(), b.parent());
+        assert!(!a.exists(), "the webview creates the file");
         remove_temp(&a);
         remove_temp(&b);
         assert!(!a.parent().unwrap().exists());
+    }
+
+    /// A folder of the test's own, under the system's temporary folder
+    fn test_parent(name: &str) -> PathBuf {
+        let parent = std::env::temp_dir().join(format!("rustino-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir(&parent).unwrap();
+        parent
+    }
+
+    #[test]
+    fn private_folders_are_new_and_unpredictable() {
+        let parent = test_parent("private");
+        let a = create_private_folder(&parent).unwrap();
+        let b = create_private_folder(&parent).unwrap();
+        assert_ne!(a, b);
+        let name = a.file_name().unwrap().to_str().unwrap();
+        assert_eq!(temp_folder_process(name), Some(std::process::id()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::remove_dir_all(&parent).unwrap();
+    }
+
+    #[test]
+    fn temp_folder_names() {
+        let random = "0123456789abcdef0123456789ABCDEF";
+        assert_eq!(temp_folder_process(&format!("rustino-download-42-{random}")), Some(42));
+        assert_eq!(temp_folder_process("rustino-download-42-1"), None);
+        assert_eq!(temp_folder_process(&format!("rustino-download-x-{random}")), None);
+        assert_eq!(temp_folder_process(&format!("other-42-{random}")), None);
+        assert_eq!(temp_folder_process(&format!("rustino-download-42-{}", "g".repeat(32))), None);
+    }
+
+    #[test]
+    fn stale_folders_of_ended_processes_are_removed() {
+        let parent = test_parent("stale");
+        let random = "0123456789abcdef0123456789abcdef";
+        // No process has this id: the limits are 99999 on macOS, 2^22 on Linux, and Windows ids
+        // are multiples of 4
+        let stale = parent.join(format!("rustino-download-99999999-{random}"));
+        let own = parent.join(format!("rustino-download-{}-{random}", std::process::id()));
+        let other = parent.join("rustino-download-other");
+        for folder in [&stale, &own, &other] {
+            std::fs::create_dir(folder).unwrap();
+            std::fs::write(folder.join("file"), "x").unwrap();
+        }
+        remove_stale_temp_folders(&parent);
+        assert!(!stale.exists());
+        assert!(own.exists() && other.exists());
+        std::fs::remove_dir_all(&parent).unwrap();
+    }
+
+    #[test]
+    fn running_processes_are_alive() {
+        assert!(process_alive(std::process::id()));
+        assert!(!process_alive(99999999));
     }
 
     #[test]
