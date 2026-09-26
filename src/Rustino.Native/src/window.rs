@@ -23,6 +23,8 @@ use crate::state::SharedState;
 pub struct RustinoWindow {
     setup: Mutex<Setup>,
     pub state: Arc<SharedState>,
+    /// Why the window failed to run
+    last_error: Mutex<Option<String>>,
 }
 
 /// What the exports change, behind one lock: `run` takes the configuration and installs the
@@ -68,7 +70,16 @@ impl RustinoWindow {
                 pending: Vec::new(),
             }),
             state,
+            last_error: Mutex::new(None),
         }
+    }
+
+    pub fn set_last_error(&self, message: String) {
+        *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
+    }
+
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn setup(&self) -> MutexGuard<'_, Setup> {
@@ -142,7 +153,8 @@ impl RustinoWindow {
         })
     }
 
-    /// Runs the window on this thread until it closes.
+    /// Runs the window on this thread until it closes. Fails when the window or the webview
+    /// can't be created (e.g. without the WebView2 Runtime).
     pub fn run(&self, started: Started) -> Result<(), String> {
         // Whatever happens, the window no longer runs afterwards
         struct Exit<'a>(&'a RustinoWindow);

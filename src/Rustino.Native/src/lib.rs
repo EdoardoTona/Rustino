@@ -56,15 +56,47 @@ pub unsafe extern "C" fn rustino_dtor(instance: *mut RustinoWindow) {
     });
 }
 
+/// Runs the window until it closes. Returns 0 when it closed, 1 when it failed: the window or the
+/// webview couldn't be created, it already ran, or the native code panicked.
+/// `rustino_get_last_error` tells why.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rustino_wait_for_exit(instance: *mut RustinoWindow) {
-    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if let Some(inst) = unsafe { instance.as_ref() }
-            && let Ok(started) = inst.start()
-        {
-            let _ = inst.run(started);
+pub unsafe extern "C" fn rustino_wait_for_exit(instance: *mut RustinoWindow) -> i32 {
+    let Some(inst) = (unsafe { instance.as_ref() }) else {
+        return 1;
+    };
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let started = inst.start()?;
+        inst.run(started)
+    }))
+    .unwrap_or_else(|panic| Err(panic_message(panic.as_ref())));
+    match result {
+        Ok(()) => 0,
+        Err(message) => {
+            inst.set_last_error(message);
+            1
         }
-    }));
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown error".into());
+    format!("The native window failed: {detail}")
+}
+
+/// Why `rustino_wait_for_exit` failed, or null. Free it with `rustino_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_get_last_error(instance: *mut RustinoWindow) -> *mut c_char {
+    catch_unwind(|| {
+        let message = unsafe { instance.as_ref() }?.last_error()?;
+        std::ffi::CString::new(message.replace('\0', " ")).ok().map(|s| s.into_raw())
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
@@ -1586,6 +1618,31 @@ pub unsafe extern "C" fn rustino_splash_dtor(splash: *mut splash::SplashWindow) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panic_messages() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_message(payload.as_ref()), "The native window failed: boom");
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("bang"));
+        assert_eq!(panic_message(payload.as_ref()), "The native window failed: bang");
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42);
+        assert_eq!(panic_message(payload.as_ref()), "The native window failed: unknown error");
+    }
+
+    #[test]
+    fn a_window_runs_once() {
+        let instance = Box::into_raw(Box::new(RustinoWindow::new(WindowConfig::default())));
+        unsafe {
+            assert!(rustino_get_last_error(instance).is_null());
+            assert!(instance.as_ref().unwrap().start().is_ok());
+            // The window is starting: a second run fails without touching it
+            assert_eq!(rustino_wait_for_exit(instance), 1);
+            let error = rustino_get_last_error(instance);
+            assert_eq!(std::ffi::CStr::from_ptr(error).to_str().unwrap(), "The window is already running.");
+            rustino_free_string(error);
+            drop(Box::from_raw(instance));
+        }
+    }
 
     #[test]
     fn app_user_model_id_accepts_documented_form() {
