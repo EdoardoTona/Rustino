@@ -614,27 +614,8 @@ fn dispatch_command(
             let _ = webview.evaluate_script(&js);
         }
         RustinoCommand::SendWebMessage(msg) => {
-            let mut escaped = String::with_capacity(msg.len() + 16);
-            for ch in msg.chars() {
-                match ch {
-                    '\\' => escaped.push_str("\\\\"),
-                    '\'' => escaped.push_str("\\'"),
-                    '"' => escaped.push_str("\\\""),
-                    '\n' => escaped.push_str("\\n"),
-                    '\r' => escaped.push_str("\\r"),
-                    '\t' => escaped.push_str("\\t"),
-                    '\0' => escaped.push_str("\\0"),
-                    '\u{0008}' => escaped.push_str("\\b"),
-                    '\u{000C}' => escaped.push_str("\\f"),
-                    '\u{2028}' => escaped.push_str("\\u2028"),
-                    '\u{2029}' => escaped.push_str("\\u2029"),
-                    '<' => escaped.push_str("\\x3c"),
-                    _ => escaped.push(ch),
-                }
-            }
-            let js = format!(
-                "window.dispatchEvent(new MessageEvent('message',{{data:'{escaped}'}}));"
-            );
+            let data = crate::util::js_string_literal(&msg);
+            let js = format!("window.dispatchEvent(new MessageEvent('message',{{data:{data}}}));");
             let _ = webview.evaluate_script(&js);
         }
         RustinoCommand::LoadUrl(url) => {
