@@ -9,7 +9,10 @@ using Rustino.NET.Reactive;
 using var loggerFactory = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
 var logger = loggerFactory.CreateLogger("Rustino");
 var iconPath = Path.Combine(AppContext.BaseDirectory, "icon.png");
+// macOS: monochrome template icon that follows the menu bar's colors
+var trayIconPath = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsMacOS() ? "tray-template.png" : "icon.png");
 var menuInitialized = false;
+var (saveEnabled, saveRenamed, sidebarChecked, trayTitleCount) = (true, false, true, 0);
 
 // --- Notifications: Windows drops toasts for an appId that is not registered ---
 RustinoWindow.RegisterNotificationAppId("Rustino", "Rustino", iconPath);
@@ -51,15 +54,24 @@ var appMenu = new RustinoMenu()
             .AddPredefinedItem(PredefinedMenuItem.SelectAll);
     })
     .AddSubmenu("View", view => view
-        .AddCheckItem("sidebar", "Show Sidebar", isChecked: true)
+        .AddCheckItem("sidebar", "Show Sidebar", isChecked: true, accelerator: "CmdOrCtrl+B")
         .AddCheckItem("statusbar", "Show Status Bar", isChecked: true)
         .AddSeparator()
         .AddSubmenu("Theme", theme => theme
             .AddItem("theme-light", "Light")
             .AddItem("theme-dark", "Dark")
             .AddItem("theme-system", "System Default")))
-    .AddSubmenu("Help", help => help
-        .AddItem("docs", "Documentation")
+    .AddWindowMenu("Window", win => // macOS appends the open windows
+    {
+        // Minimize/Maximize are not available on Linux
+        if (!OperatingSystem.IsLinux())
+            win.AddPredefinedItem(PredefinedMenuItem.Minimize)
+                .AddPredefinedItem(PredefinedMenuItem.Maximize)
+                .AddSeparator();
+        win.AddItem("center", "Center");
+    })
+    .AddHelpMenu("Help", help => help // macOS adds a search field
+        .AddItem("docs", "Documentation", iconPath: iconPath)
         .AddSeparator()
         .AddItem("about", "About Rustino"));
 
@@ -73,6 +85,8 @@ var contextMenu = new RustinoMenu()
 var trayMenu = new RustinoMenu()
     .AddItem("tray-show", "Show Window")
     .AddItem("tray-hide", "Hide Window")
+    .AddSeparator()
+    .AddCheckItem("sidebar", "Show Sidebar", isChecked: true) // same id as View › Show Sidebar: kept in sync
     .AddSeparator()
     .AddItem("tray-quit", "Quit");
 
@@ -91,7 +105,8 @@ window.PageLoaded += (_, a) =>
         {
             menuInitialized = true;
             window.SetMenu(appMenu);
-            window.SetTrayIcon(iconPath, tooltip: "Rustino Feature Showcase", menu: trayMenu);
+            window.SetTrayIcon(trayIconPath, tooltip: "Rustino Feature Showcase", menu: trayMenu,
+                isTemplateIcon: OperatingSystem.IsMacOS(), menuOnLeftClick: false);
         }
     }
 };
@@ -121,14 +136,23 @@ window.MenuItemClicked += (_, id) =>
         case "exit" or "tray-quit": window.Close(); break;
         case "tray-show": window.SetVisible(true).Focus(); break;
         case "tray-hide": window.SetVisible(false); break;
+        case "center": window.Center(); break;
         default: Log($"Menu: {id}"); break;
     }
 };
 
-window.TrayIconClicked += (_, _) =>
+window.MenuItemCheckedChanged += (_, e) =>
 {
-    Console.WriteLine("[Tray] Icon clicked");
-    window.SetVisible(true).Focus();
+    if (e.Id == "sidebar") sidebarChecked = e.IsChecked;
+    Log($"Menu: {e.Id} {(e.IsChecked ? "checked" : "unchecked")}");
+};
+
+// Left click shows the window, right click opens the tray menu (menuOnLeftClick: false)
+window.TrayIconClicked += (_, e) =>
+{
+    Console.WriteLine($"[Tray] {e.Button} click at ({e.X}, {e.Y})");
+    if (e.Button == TrayMouseButton.Left)
+        window.SetVisible(true).Focus();
 };
 
 // --- IPC message handler ---
@@ -229,6 +253,29 @@ void HandleMessage(string msg)
         // Context menu
         case "show-context-menu":
             window.ShowContextMenu(contextMenu);
+            break;
+
+        // Menu items, changed without rebuilding the menu
+        case "menu-toggle-save":
+            saveEnabled = !saveEnabled;
+            window.SetMenuItemEnabled("save", saveEnabled);
+            Log($"File › Save {(saveEnabled ? "enabled" : "disabled")}");
+            break;
+        case "menu-rename-save":
+            saveRenamed = !saveRenamed;
+            window.SetMenuItemText("save", saveRenamed ? "Save All" : "Save");
+            break;
+        case "menu-toggle-sidebar":
+            sidebarChecked = !sidebarChecked;
+            window.SetMenuItemChecked("sidebar", sidebarChecked);
+            break;
+
+        // Tray title (macOS, Linux)
+        case "tray-title":
+            window.SetTrayTitle($"{++trayTitleCount}");
+            break;
+        case "tray-title-clear":
+            window.SetTrayTitle(null);
             break;
 
         // Monitors
@@ -498,7 +545,13 @@ static string Html() => """
         <h2>Menus & System Tray</h2>
         <div class="card">
           <h3>Application Menu</h3>
-          <p style="color:#888;font-size:0.82rem">The menu bar above is set via SetMenu(). It includes submenus, check items, separators, and keyboard accelerators.</p>
+          <p style="color:#888;font-size:0.82rem">The menu bar above is set via SetMenu(). It includes submenus, check items, separators, keyboard accelerators and an item with an icon (Help › Documentation). On macOS the Window menu lists the open windows and the Help menu has a search field.</p>
+          <div class="row">
+            <button class="b" onclick="send('menu-toggle-save')">Enable/Disable File › Save</button>
+            <button class="b" onclick="send('menu-rename-save')">Rename File › Save</button>
+            <button class="b" onclick="send('menu-toggle-sidebar')">Toggle Show Sidebar</button>
+          </div>
+          <p style="color:#888;font-size:0.82rem;margin-top:8px">SetMenuItemEnabled(), SetMenuItemText() and SetMenuItemChecked() change items without rebuilding the menu. Show Sidebar is also in the tray menu: both stay in sync.</p>
         </div>
         <div class="card">
           <h3>Context Menu</h3>
@@ -509,7 +562,12 @@ static string Html() => """
         </div>
         <div class="card">
           <h3>System Tray</h3>
-          <p style="color:#888;font-size:0.82rem">A tray icon is registered via SetTrayIcon() with a tooltip and menu. Click the tray icon to show the window.</p>
+          <p style="color:#888;font-size:0.82rem">A tray icon is registered via SetTrayIcon() with a tooltip and menu. Left-click the tray icon to show the window, right-click it for the menu. On macOS the icon is a template that follows the menu bar's colors.</p>
+          <div class="row">
+            <button class="b" onclick="send('tray-title')">Set Tray Title</button>
+            <button class="b" onclick="send('tray-title-clear')">Clear Tray Title</button>
+          </div>
+          <p style="color:#888;font-size:0.82rem;margin-top:8px">SetTrayTitle() shows text next to the icon (macOS and Linux).</p>
         </div>
       </div>
 

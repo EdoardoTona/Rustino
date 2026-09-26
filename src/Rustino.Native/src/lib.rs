@@ -1129,11 +1129,57 @@ pub unsafe extern "C" fn rustino_show_context_menu(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_menu_item_enabled(
+    instance: *mut RustinoWindow,
+    id: *const c_char,
+    enabled: i32,
+) {
+    unsafe { update_menu_item(instance, id, menu::MenuItemUpdate::Enabled(enabled != 0)) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_menu_item_checked(
+    instance: *mut RustinoWindow,
+    id: *const c_char,
+    checked: i32,
+) {
+    unsafe { update_menu_item(instance, id, menu::MenuItemUpdate::Checked(checked != 0)) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_menu_item_text(
+    instance: *mut RustinoWindow,
+    id: *const c_char,
+    text: *const c_char,
+) {
+    if let Some(text) = unsafe { util::cstr_to_string(text) } {
+        unsafe { update_menu_item(instance, id, menu::MenuItemUpdate::Text(text)) };
+    }
+}
+
+unsafe fn update_menu_item(
+    instance: *mut RustinoWindow,
+    id: *const c_char,
+    update: menu::MenuItemUpdate,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_ref() } {
+            if let Some(id) = unsafe { util::cstr_to_string(id) } {
+                inst.send_command(RustinoCommand::UpdateMenuItem(id, update));
+            }
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_tray_icon(
     instance: *mut RustinoWindow,
     icon_path: *const c_char,
     tooltip: *const c_char,
     menu_json: *const c_char,
+    title: *const c_char,
+    icon_is_template: i32,
+    menu_on_left_click: i32,
 ) {
     let _ = catch_unwind(|| {
         if let Some(inst) = unsafe { instance.as_ref() } {
@@ -1142,9 +1188,21 @@ pub unsafe extern "C" fn rustino_set_tray_icon(
                     icon_path: path,
                     tooltip: unsafe { util::cstr_to_string(tooltip) },
                     menu_json: unsafe { util::cstr_to_string(menu_json) },
+                    title: unsafe { util::cstr_to_string(title) },
+                    icon_is_template: icon_is_template != 0,
+                    menu_on_left_click: menu_on_left_click != 0,
                 };
                 inst.send_command(RustinoCommand::SetTrayIcon(params));
             }
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_tray_title(instance: *mut RustinoWindow, title: *const c_char) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_ref() } {
+            inst.send_command(RustinoCommand::SetTrayTitle(unsafe { util::cstr_to_string(title) }));
         }
     });
 }
@@ -1273,7 +1331,7 @@ pub unsafe extern "C" fn rustino_set_navigation_handler(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_menu_event_handler(
     instance: *mut RustinoWindow,
-    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char, i32)>,
 ) {
     let _ = catch_unwind(|| {
         if let Some(inst) = unsafe { instance.as_mut() } {
@@ -1285,7 +1343,7 @@ pub unsafe extern "C" fn rustino_set_menu_event_handler(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_tray_icon_event_handler(
     instance: *mut RustinoWindow,
-    handler: Option<unsafe extern "C" fn(*mut c_void)>,
+    handler: Option<unsafe extern "C" fn(*mut c_void, i32, i32, i32)>,
 ) {
     let _ = catch_unwind(|| {
         if let Some(inst) = unsafe { instance.as_mut() } {

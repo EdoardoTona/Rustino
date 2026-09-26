@@ -33,6 +33,14 @@ internal delegate int NavigationCallback(IntPtr context, IntPtr url);
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 internal delegate void CustomSchemeCallback(IntPtr context, IntPtr url, IntPtr response);
 
+// isChecked: new state of a check item (0/1), -1 for other items
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void MenuItemCallback(IntPtr context, IntPtr id, int isChecked);
+
+// button: 0 left, 1 right, 2 middle
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void TrayIconCallback(IntPtr context, int button, int x, int y);
+
 internal static class RustinoDllImports
 {
     private const string Lib = NativeLibraryResolver.LibName;
@@ -316,11 +324,37 @@ internal static class RustinoDllImports
         double y);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_menu_item_enabled(
+        IntPtr instance,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id,
+        int enabled);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_menu_item_checked(
+        IntPtr instance,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id,
+        int isChecked);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_menu_item_text(
+        IntPtr instance,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_tray_icon(
         IntPtr instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string iconPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? tooltip,
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string? menuJson);
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? menuJson,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? title,
+        int isTemplateIcon,
+        int menuOnLeftClick);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_tray_title(
+        IntPtr instance,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? title);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_remove_tray_icon(IntPtr instance);
@@ -355,10 +389,10 @@ internal static class RustinoDllImports
     internal static extern void rustino_set_navigation_handler(IntPtr instance, NavigationCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_menu_event_handler(IntPtr instance, StringCallback handler);
+    internal static extern void rustino_set_menu_event_handler(IntPtr instance, MenuItemCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_tray_icon_event_handler(IntPtr instance, VoidContextCallback handler);
+    internal static extern void rustino_set_tray_icon_event_handler(IntPtr instance, TrayIconCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_custom_scheme_handler(IntPtr instance, CustomSchemeCallback handler);

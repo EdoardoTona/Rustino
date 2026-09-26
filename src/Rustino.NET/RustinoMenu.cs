@@ -7,15 +7,17 @@ public partial class RustinoMenu
 {
     private readonly List<MenuItemDef> _items = new();
 
-    public RustinoMenu AddItem(string id, string label, string? accelerator = null, bool enabled = true)
+    // iconPath: image shown next to the label (scaled to the menu's icon size)
+    public RustinoMenu AddItem(string id, string label, string? accelerator = null, bool enabled = true, string? iconPath = null)
     {
-        _items.Add(new MenuItemDef { Type = "normal", Id = id, Label = label, Accelerator = accelerator, Enabled = enabled });
+        _items.Add(new MenuItemDef { Type = "normal", Id = id, Label = label, Accelerator = accelerator, Enabled = enabled, Icon = iconPath });
         return this;
     }
 
-    public RustinoMenu AddCheckItem(string id, string label, bool isChecked = false, bool enabled = true)
+    // Clicking toggles the check mark and raises MenuItemClicked and MenuItemCheckedChanged.
+    public RustinoMenu AddCheckItem(string id, string label, bool isChecked = false, bool enabled = true, string? accelerator = null)
     {
-        _items.Add(new MenuItemDef { Type = "check", Id = id, Label = label, Checked = isChecked, Enabled = enabled });
+        _items.Add(new MenuItemDef { Type = "check", Id = id, Label = label, Checked = isChecked, Enabled = enabled, Accelerator = accelerator });
         return this;
     }
 
@@ -45,9 +47,26 @@ public partial class RustinoMenu
 
     public RustinoMenu AddSubmenu(string label, Action<RustinoMenu> build, bool enabled = true)
     {
+        return AddSubmenuWithRole(label, build, enabled, role: null);
+    }
+
+    // macOS Window menu: the system appends the open windows; a normal submenu on Windows/Linux.
+    public RustinoMenu AddWindowMenu(string label, Action<RustinoMenu> build)
+    {
+        return AddSubmenuWithRole(label, build, enabled: true, role: "window");
+    }
+
+    // macOS Help menu: the system adds a search field; a normal submenu on Windows/Linux.
+    public RustinoMenu AddHelpMenu(string label, Action<RustinoMenu> build)
+    {
+        return AddSubmenuWithRole(label, build, enabled: true, role: "help");
+    }
+
+    private RustinoMenu AddSubmenuWithRole(string label, Action<RustinoMenu> build, bool enabled, string? role)
+    {
         var sub = new RustinoMenu();
         build(sub);
-        _items.Add(new MenuItemDef { Type = "submenu", Label = label, Enabled = enabled, Items = sub._items });
+        _items.Add(new MenuItemDef { Type = "submenu", Label = label, Enabled = enabled, Role = role, Items = sub._items });
         return this;
     }
 
@@ -84,6 +103,14 @@ public partial class RustinoMenu
         [JsonPropertyName("checked")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public bool? Checked { get; set; }
+
+        [JsonPropertyName("icon")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Icon { get; set; }
+
+        [JsonPropertyName("role")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Role { get; set; }
 
         [JsonPropertyName("items")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

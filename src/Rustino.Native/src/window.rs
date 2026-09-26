@@ -1,10 +1,8 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::ffi::CString;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Once, RwLock};
 
-use muda::MenuId;
 use tao::dpi::{PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -252,42 +250,20 @@ impl RustinoWindow {
 
         let state = Arc::clone(&self.state);
 
-        // Wire menu events → EventLoopProxy
-        let menu_id_map: Arc<std::sync::Mutex<HashMap<MenuId, String>>> =
-            Arc::new(std::sync::Mutex::new(HashMap::new()));
-        {
-            let proxy = event_loop.create_proxy();
-            let map = Arc::clone(&menu_id_map);
-            muda::MenuEvent::set_event_handler(Some(move |event: muda::MenuEvent| {
-                if let Ok(guard) = map.lock() {
-                    if let Some(id) = guard.get(&event.id) {
-                        let _ = proxy.send_event(RustinoCommand::MenuEventFired(id.clone()));
-                    }
-                }
-            }));
-        }
+        // Menu and tray events reach this window through its event loop
+        let event_loop_key = register_event_loop(event_loop.create_proxy());
 
-        // Wire tray icon events → EventLoopProxy
-        {
-            let proxy = event_loop.create_proxy();
-            tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
-                if let tray_icon::TrayIconEvent::Click { .. } = event {
-                    let _ = proxy.send_event(RustinoCommand::TrayIconClicked);
-                }
-            }));
-        }
-
-        #[cfg(target_os = "macos")]
-        let mut current_menu: Option<muda::Menu> = {
-            let default_menu = create_default_macos_menu(&config, &about_metadata(&config));
-            attach_menu_to_window(&default_menu, &window);
-            Some(default_menu)
-        };
-
-        #[cfg(not(target_os = "macos"))]
+        let mut menu_items = menu::MenuItems::default();
         let mut current_menu: Option<muda::Menu> = None;
+        #[cfg(target_os = "macos")]
+        {
+            let about = about_metadata(&config);
+            if let Some(built) = menu::build_menu(DEFAULT_MACOS_MENU, &about) {
+                set_menu_bar(built, &window, &config, &about, &mut current_menu, &mut menu_items);
+            }
+        }
 
-        let mut tray: Option<tray_icon::TrayIcon> = None;
+        let mut tray: Option<Tray> = None;
 
         event_loop.run_return(move |event, _, control_flow| {
             if *control_flow != ControlFlow::Exit {
@@ -303,7 +279,7 @@ impl RustinoWindow {
                         &webview,
                         &state,
                         callbacks,
-                        &menu_id_map,
+                        &mut menu_items,
                         &mut current_menu,
                         &mut config,
                         &mut tray,
@@ -365,13 +341,64 @@ impl RustinoWindow {
             }
         });
 
-        muda::MenuEvent::set_event_handler(None::<Box<dyn Fn(muda::MenuEvent) + Send + Sync>>);
-        tray_icon::TrayIconEvent::set_event_handler(
-            None::<Box<dyn Fn(tray_icon::TrayIconEvent) + Send + Sync>>,
-        );
+        unregister_event_loop(event_loop_key);
         #[cfg(target_os = "windows")]
-        crate::accelerators::set_menu(0, None);
+        crate::accelerators::set_menu(0, None, 0);
         *self.proxy.write().unwrap() = None;
+    }
+}
+
+/// Event loops of the running windows, which receive the menu and tray events.
+static EVENT_LOOPS: Mutex<Vec<(u64, EventLoopProxy<RustinoCommand>)>> = Mutex::new(Vec::new());
+
+/// Returns the key for `unregister_event_loop`.
+fn register_event_loop(proxy: EventLoopProxy<RustinoCommand>) -> u64 {
+    static NEXT_KEY: AtomicU64 = AtomicU64::new(0);
+    static INSTALL_HANDLERS: Once = Once::new();
+    // muda and tray-icon keep the first event handler for the whole process: it forwards the
+    // events to every running window, which ignores the menu items and tray icons of the others
+    INSTALL_HANDLERS.call_once(|| {
+        muda::MenuEvent::set_event_handler(Some(|event: muda::MenuEvent| {
+            send_to_event_loops(|| RustinoCommand::MenuEventFired(event.id.clone()));
+        }));
+        tray_icon::TrayIconEvent::set_event_handler(Some(|event| {
+            if let tray_icon::TrayIconEvent::Click {
+                id,
+                position,
+                button,
+                button_state,
+                ..
+            } = event
+            {
+                send_to_event_loops(|| RustinoCommand::TrayIconButton {
+                    id: id.clone(),
+                    button,
+                    pressed: button_state == tray_icon::MouseButtonState::Down,
+                    x: position.x as i32,
+                    y: position.y as i32,
+                });
+            }
+        }));
+    });
+
+    let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut loops) = EVENT_LOOPS.lock() {
+        loops.push((key, proxy));
+    }
+    key
+}
+
+fn unregister_event_loop(key: u64) {
+    if let Ok(mut loops) = EVENT_LOOPS.lock() {
+        loops.retain(|(k, _)| *k != key);
+    }
+}
+
+fn send_to_event_loops(command: impl Fn() -> RustinoCommand) {
+    if let Ok(loops) = EVENT_LOOPS.lock() {
+        for (_, proxy) in loops.iter() {
+            let _ = proxy.send_event(command());
+        }
     }
 }
 
@@ -489,10 +516,10 @@ fn dispatch_command(
     webview: &wry::WebView,
     state: &SharedState,
     callbacks: RustinoCallbacks,
-    menu_id_map: &Arc<std::sync::Mutex<HashMap<MenuId, String>>>,
+    menu_items: &mut menu::MenuItems,
     current_menu: &mut Option<muda::Menu>,
     config: &mut WindowConfig,
-    tray: &mut Option<tray_icon::TrayIcon>,
+    tray: &mut Option<Tray>,
 ) -> bool {
     match cmd {
         RustinoCommand::SetTitle(title) => window.set_title(&title),
@@ -583,73 +610,92 @@ fn dispatch_command(
             set_badge_count(window, count, [bg_r, bg_g, bg_b], [fg_r, fg_g, fg_b]);
         }
         RustinoCommand::SetMenu(json) => {
-            if let Some(old) = current_menu.take() {
-                remove_menu_from_window(&old, window);
-            }
             let about = about_metadata(config);
             if let Some(built) = menu::build_menu(&json, &about) {
-                // On macOS the first submenu of the menu bar becomes the application menu: without
-                // AddAppMenu the standard one is prepended so the first custom submenu stays visible.
-                #[cfg(target_os = "macos")]
-                let app_menu = built
-                    .app_menu
-                    .or_else(|| Some(create_macos_app_menu(config, &about)));
-                #[cfg(not(target_os = "macos"))]
-                let app_menu = built.app_menu;
-                if let Some(app_menu) = app_menu {
-                    let _ = built.menu.prepend(&app_menu);
-                }
-                attach_menu_to_window(&built.menu, window);
-                if let Ok(mut map) = menu_id_map.lock() {
-                    map.extend(built.id_map);
-                }
-                *current_menu = Some(built.menu);
+                set_menu_bar(built, window, config, &about, current_menu, menu_items);
             }
         }
         RustinoCommand::RemoveMenu => {
             if let Some(old) = current_menu.take() {
                 remove_menu_from_window(&old, window);
             }
+            menu_items.replace(menu::MenuOwner::MenuBar, Vec::new());
         }
         RustinoCommand::ShowContextMenu(json, pos) => {
             if let Some(built) = menu::build_menu(&json, &about_metadata(config)) {
-                if let Ok(mut map) = menu_id_map.lock() {
-                    map.extend(built.id_map);
-                }
+                menu_items.replace(menu::MenuOwner::ContextMenu, built.items);
                 show_context_menu(&built.menu, window, pos);
             }
         }
+        RustinoCommand::UpdateMenuItem(id, update) => menu_items.update(&id, &update),
         RustinoCommand::SetTrayIcon(params) => {
             *tray = None;
+            menu_items.replace(menu::MenuOwner::Tray, Vec::new());
             if let Some(ico) = load_tray_icon(&params.icon_path) {
-                let mut builder = tray_icon::TrayIconBuilder::new().with_icon(ico);
+                let mut builder = tray_icon::TrayIconBuilder::new()
+                    .with_icon(ico)
+                    .with_icon_as_template(params.icon_is_template)
+                    .with_menu_on_left_click(params.menu_on_left_click);
                 if let Some(ref tooltip) = params.tooltip {
                     builder = builder.with_tooltip(tooltip);
                 }
+                if let Some(ref title) = params.title {
+                    builder = builder.with_title(title);
+                }
+                let mut has_menu = false;
                 if let Some(ref menu_json) = params.menu_json {
                     if let Some(built) = menu::build_menu(menu_json, &about_metadata(config)) {
-                        if let Ok(mut map) = menu_id_map.lock() {
-                            map.extend(built.id_map);
-                        }
+                        has_menu = !built.menu.items().is_empty();
+                        menu_items.replace(menu::MenuOwner::Tray, built.items);
                         builder = builder.with_menu(Box::new(built.menu));
                     }
                 }
-                *tray = builder.build().ok();
+                *tray = builder.build().ok().map(|icon| Tray {
+                    icon,
+                    has_menu,
+                    menu_on_left_click: params.menu_on_left_click,
+                });
+            }
+        }
+        RustinoCommand::SetTrayTitle(title) => {
+            if let Some(tray) = tray {
+                // tray-icon ignores `None` on macOS: an empty title removes it everywhere
+                tray.icon.set_title(Some(title.unwrap_or_default()));
             }
         }
         RustinoCommand::RemoveTrayIcon => {
             *tray = None;
+            menu_items.replace(menu::MenuOwner::Tray, Vec::new());
         }
-        RustinoCommand::MenuEventFired(id) => {
-            if let Some(cb) = callbacks.on_menu_item_clicked {
-                if let Ok(cstr) = CString::new(id.as_str()) {
-                    unsafe { cb(callbacks.context, cstr.as_ptr()) };
-                }
+        // Menu and tray events reach every window: each handles only its own items and tray icon
+        RustinoCommand::MenuEventFired(menu_id) => {
+            if let Some((id, checked)) = menu_items.clicked(&menu_id)
+                && let Some(cb) = callbacks.on_menu_item_clicked
+                && let Ok(cstr) = CString::new(id)
+            {
+                unsafe { cb(callbacks.context, cstr.as_ptr(), checked.map_or(-1, i32::from)) };
             }
         }
-        RustinoCommand::TrayIconClicked => {
-            if let Some(cb) = callbacks.on_tray_icon_clicked {
-                unsafe { cb(callbacks.context) };
+        RustinoCommand::TrayIconButton {
+            id,
+            button,
+            pressed,
+            x,
+            y,
+        } => {
+            // One click event per click: on press when the click opens the tray menu (on macOS
+            // the menu takes the release), otherwise on release
+            if let Some(tray) = tray.as_ref()
+                && *tray.icon.id() == id
+                && pressed == tray.opens_menu(button)
+                && let Some(cb) = callbacks.on_tray_icon_clicked
+            {
+                let button = match button {
+                    tray_icon::MouseButton::Left => 0,
+                    tray_icon::MouseButton::Right => 1,
+                    tray_icon::MouseButton::Middle => 2,
+                };
+                unsafe { cb(callbacks.context, button, x, y) };
             }
         }
         RustinoCommand::ShowOpenFileDialog(..) |
@@ -670,25 +716,63 @@ fn dispatch_command(
 
 // --- Menu platform helpers ---
 
-#[cfg(target_os = "macos")]
-pub(crate) fn create_default_macos_menu(
-    config: &crate::config::WindowConfig,
-    about: &muda::AboutMetadata,
-) -> muda::Menu {
-    let default_menu = muda::Menu::new();
-    let _ = default_menu.append(&create_macos_app_menu(config, about));
+/// Menu bar shown on macOS until `SetMenu`, after the standard application menu. Cmd+C/V/X/A/Z
+/// reach the webview only through the Edit items.
+#[cfg(any(target_os = "macos", test))]
+const DEFAULT_MACOS_MENU: &str = r#"[
+    {"type": "submenu", "label": "Edit", "items": [
+        {"type": "predefined", "item": "undo"},
+        {"type": "predefined", "item": "redo"},
+        {"type": "separator"},
+        {"type": "predefined", "item": "cut"},
+        {"type": "predefined", "item": "copy"},
+        {"type": "predefined", "item": "paste"},
+        {"type": "predefined", "item": "select_all"}
+    ]},
+    {"type": "submenu", "label": "Window", "role": "window", "items": [
+        {"type": "predefined", "item": "minimize"},
+        {"type": "predefined", "item": "maximize"},
+        {"type": "separator"},
+        {"type": "predefined", "item": "bring_all_to_front"}
+    ]}
+]"#;
 
-    let edit_menu = muda::Submenu::new("Edit", true);
-    let _ = edit_menu.append(&muda::PredefinedMenuItem::undo(None));
-    let _ = edit_menu.append(&muda::PredefinedMenuItem::redo(None));
-    let _ = edit_menu.append(&muda::PredefinedMenuItem::separator());
-    let _ = edit_menu.append(&muda::PredefinedMenuItem::cut(None));
-    let _ = edit_menu.append(&muda::PredefinedMenuItem::copy(None));
-    let _ = edit_menu.append(&muda::PredefinedMenuItem::paste(None));
-    let _ = edit_menu.append(&muda::PredefinedMenuItem::select_all(None));
-    let _ = default_menu.append(&edit_menu);
-
-    default_menu
+/// Replaces the window's menu bar (on macOS, the application's).
+fn set_menu_bar(
+    built: menu::BuiltMenu,
+    window: &tao::window::Window,
+    _config: &WindowConfig,
+    _about: &muda::AboutMetadata,
+    current_menu: &mut Option<muda::Menu>,
+    menu_items: &mut menu::MenuItems,
+) {
+    if let Some(old) = current_menu.take() {
+        remove_menu_from_window(&old, window);
+    }
+    // On macOS the first submenu of the menu bar becomes the application menu: without
+    // AddAppMenu the standard one is prepended so the first custom submenu stays visible.
+    #[cfg(target_os = "macos")]
+    let app_menu = built
+        .app_menu
+        .or_else(|| Some(create_macos_app_menu(_config, _about)));
+    #[cfg(not(target_os = "macos"))]
+    let app_menu = built.app_menu;
+    if let Some(app_menu) = app_menu {
+        let _ = built.menu.prepend(&app_menu);
+    }
+    attach_menu_to_window(&built.menu, built.custom_edit_shortcuts, window);
+    // After init_for_nsapp, as muda requires
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window_menu) = &built.window_menu {
+            window_menu.set_as_windows_menu_for_nsapp();
+        }
+        if let Some(help_menu) = &built.help_menu {
+            help_menu.set_as_help_menu_for_nsapp();
+        }
+    }
+    menu_items.replace(menu::MenuOwner::MenuBar, built.items);
+    *current_menu = Some(built.menu);
 }
 
 /// Standard macOS application menu: About, Hide, Hide Others, Show All, Quit.
@@ -748,12 +832,13 @@ fn about_metadata(config: &crate::config::WindowConfig) -> muda::AboutMetadata {
     }
 }
 
-fn attach_menu_to_window(menu: &muda::Menu, _window: &tao::window::Window) {
+/// `_custom_edit_shortcuts`: see `BuiltMenu::custom_edit_shortcuts` (Windows only).
+fn attach_menu_to_window(menu: &muda::Menu, _custom_edit_shortcuts: u8, _window: &tao::window::Window) {
     #[cfg(target_os = "windows")]
     {
         use tao::platform::windows::WindowExtWindows;
         unsafe { let _ = menu.init_for_hwnd(_window.hwnd() as _); }
-        crate::accelerators::set_menu(_window.hwnd(), Some(menu));
+        crate::accelerators::set_menu(_window.hwnd(), Some(menu), _custom_edit_shortcuts);
     }
     #[cfg(target_os = "macos")]
     {
@@ -771,7 +856,7 @@ fn remove_menu_from_window(menu: &muda::Menu, _window: &tao::window::Window) {
     {
         use tao::platform::windows::WindowExtWindows;
         unsafe { let _ = menu.remove_for_hwnd(_window.hwnd() as _); }
-        crate::accelerators::set_menu(_window.hwnd(), None);
+        crate::accelerators::set_menu(_window.hwnd(), None, 0);
     }
     #[cfg(target_os = "macos")]
     {
@@ -1021,6 +1106,24 @@ fn set_badge_count_macos(count: Option<u32>) {
     }
 }
 
+struct Tray {
+    icon: tray_icon::TrayIcon,
+    has_menu: bool,
+    menu_on_left_click: bool,
+}
+
+impl Tray {
+    /// Whether clicking with this button shows the tray menu (macOS, Windows).
+    fn opens_menu(&self, button: tray_icon::MouseButton) -> bool {
+        self.has_menu
+            && match button {
+                tray_icon::MouseButton::Left => self.menu_on_left_click,
+                tray_icon::MouseButton::Right => true,
+                tray_icon::MouseButton::Middle => false,
+            }
+    }
+}
+
 fn load_tray_icon(path: &str) -> Option<tray_icon::Icon> {
     let img = image::open(path).ok()?.into_rgba8();
     let (w, h) = img.dimensions();
@@ -1157,31 +1260,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "muda::Menu can only be created on the main thread on macOS"]
-    #[cfg(target_os = "macos")]
-    fn test_create_default_macos_menu() {
-        let mut config = crate::config::WindowConfig::default();
-        config.title = "Test App".to_string();
-        let menu = super::create_default_macos_menu(&config, &super::about_metadata(&config));
-        let items = menu.items();
-        assert_eq!(items.len(), 2, "Menu should have exactly 2 submenus (App and Edit)");
-    }
-
-    #[test]
-    #[ignore = "muda::Menu can only be created on the main thread on macOS"]
-    #[cfg(target_os = "macos")]
-    fn test_create_default_macos_menu_with_about_metadata() {
-        let mut config = crate::config::WindowConfig::default();
-        config.title = "Test App".to_string();
-        config.about_name = Some("Custom App Name".to_string());
-        config.about_version = Some("1.2.3".to_string());
-        config.about_copyright = Some("© 2026 Test Corp".to_string());
-        config.about_website = Some("https://test.com".to_string());
-        config.about_license = Some("MIT".to_string());
-        config.about_authors = vec!["Alice".to_string(), "Bob".to_string()];
-        config.about_comments = Some("A test application".to_string());
-        let menu = super::create_default_macos_menu(&config, &super::about_metadata(&config));
-        let items = menu.items();
-        assert_eq!(items.len(), 2, "Menu should have exactly 2 submenus (App and Edit)");
+    fn default_macos_menu_parses() {
+        let defs: Vec<crate::menu::MenuItemDef> =
+            serde_json::from_str(super::DEFAULT_MACOS_MENU).unwrap();
+        assert_eq!(defs.len(), 2, "Edit and Window submenus");
     }
 }

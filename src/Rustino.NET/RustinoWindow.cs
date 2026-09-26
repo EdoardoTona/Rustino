@@ -64,7 +64,8 @@ public class RustinoWindow : IDisposable
     private readonly EventObservable<NavigationEventArgs> _navigatingObs = new();
     private readonly EventObservable<EventArgs> _windowClosedObs = new();
     private readonly EventObservable<string> _menuItemClickedObs = new();
-    private readonly EventObservable<EventArgs> _trayIconClickedObs = new();
+    private readonly EventObservable<MenuItemCheckedEventArgs> _menuItemCheckedChangedObs = new();
+    private readonly EventObservable<TrayIconClickedEventArgs> _trayIconClickedObs = new();
 
     public int LogVerbosity { get; set; }
 
@@ -80,8 +81,8 @@ public class RustinoWindow : IDisposable
     private static readonly WebMessageCallback WebMsgCb = OnWebMessageNative;
     private static readonly PageLoadCallback PageLoadCb = OnPageLoadNative;
     private static readonly NavigationCallback NavCb = OnNavigationNative;
-    private static readonly StringCallback MenuItemCb = OnMenuItemClickedNative;
-    private static readonly VoidContextCallback TrayCb = OnTrayIconClickedNative;
+    private static readonly MenuItemCallback MenuItemCb = OnMenuItemClickedNative;
+    private static readonly TrayIconCallback TrayCb = OnTrayIconClickedNative;
     private static readonly CustomSchemeCallback CustomSchemeCb = OnCustomSchemeNative;
 
     // --- Logging delegate ---
@@ -105,7 +106,11 @@ public class RustinoWindow : IDisposable
     public event EventHandler<PageLoadEventArgs>? PageLoaded;
     public event EventHandler<NavigationEventArgs>? Navigating;
     public event EventHandler<string>? MenuItemClicked;
-    public event EventHandler? TrayIconClicked;
+    // Raised after MenuItemClicked when the user toggles a check item
+    public event EventHandler<MenuItemCheckedEventArgs>? MenuItemCheckedChanged;
+    // Raised once per click on the tray icon: on release, or on press when the click opens the
+    // tray menu. Never raised on Linux.
+    public event EventHandler<TrayIconClickedEventArgs>? TrayIconClicked;
 
     // --- Observable streams ---
 
@@ -118,7 +123,8 @@ public class RustinoWindow : IDisposable
     public IObservable<NavigationEventArgs> WhenNavigating => _navigatingObs;
     public IObservable<EventArgs> WhenWindowClosed => _windowClosedObs;
     public IObservable<string> WhenMenuItemClicked => _menuItemClickedObs;
-    public IObservable<EventArgs> WhenTrayIconClicked => _trayIconClickedObs;
+    public IObservable<MenuItemCheckedEventArgs> WhenMenuItemCheckedChanged => _menuItemCheckedChangedObs;
+    public IObservable<TrayIconClickedEventArgs> WhenTrayIconClicked => _trayIconClickedObs;
 
     // --- Notifications (static — no window required) ---
 
@@ -595,22 +601,61 @@ public class RustinoWindow : IDisposable
         return this;
     }
 
-    // --- System Tray (post-run) ---
+    // --- Menu items (post-run) ---
+    // Changes apply to every item with this id in the menu bar and in the tray menu. Context menus
+    // are built from their RustinoMenu at every ShowContextMenu.
 
-    public RustinoWindow SetTrayIcon(string iconPath, string? tooltip = null, RustinoMenu? menu = null)
+    public RustinoWindow SetMenuItemEnabled(string id, bool enabled)
     {
         if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_tray_icon(
-                _nativeHandle, iconPath, tooltip, menu?.ToJson());
+            RustinoDllImports.rustino_set_menu_item_enabled(_nativeHandle, id, enabled ? 1 : 0);
         return this;
     }
 
-    public RustinoWindow SetTrayIcon(Stream icon, string? tooltip = null, RustinoMenu? menu = null)
+    public RustinoWindow SetMenuItemChecked(string id, bool isChecked)
+    {
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoDllImports.rustino_set_menu_item_checked(_nativeHandle, id, isChecked ? 1 : 0);
+        return this;
+    }
+
+    public RustinoWindow SetMenuItemText(string id, string text)
+    {
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoDllImports.rustino_set_menu_item_text(_nativeHandle, id, text);
+        return this;
+    }
+
+    // --- System Tray (post-run) ---
+
+    // title: text next to the icon (macOS, Linux). isTemplateIcon (macOS): the icon's alpha is used
+    // as a mask that follows the menu bar's colors. menuOnLeftClick: false leaves left clicks to
+    // TrayIconClicked (macOS, Windows).
+    public RustinoWindow SetTrayIcon(string iconPath, string? tooltip = null, RustinoMenu? menu = null,
+        string? title = null, bool isTemplateIcon = false, bool menuOnLeftClick = true)
+    {
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoDllImports.rustino_set_tray_icon(
+                _nativeHandle, iconPath, tooltip, menu?.ToJson(), title,
+                isTemplateIcon ? 1 : 0, menuOnLeftClick ? 1 : 0);
+        return this;
+    }
+
+    public RustinoWindow SetTrayIcon(Stream icon, string? tooltip = null, RustinoMenu? menu = null,
+        string? title = null, bool isTemplateIcon = false, bool menuOnLeftClick = true)
     {
         var tempPath = Path.Combine(Path.GetTempPath(), $"rustino_tray_{Guid.NewGuid():N}.png");
         using (var fs = File.Create(tempPath))
             icon.CopyTo(fs);
-        return SetTrayIcon(tempPath, tooltip, menu);
+        return SetTrayIcon(tempPath, tooltip, menu, title, isTemplateIcon, menuOnLeftClick);
+    }
+
+    // Text next to the tray icon (macOS, Linux); null removes it.
+    public RustinoWindow SetTrayTitle(string? title)
+    {
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoDllImports.rustino_set_tray_title(_nativeHandle, title);
+        return this;
     }
 
     // --- Badge ---
@@ -969,20 +1014,26 @@ public class RustinoWindow : IDisposable
         return args.Cancel ? 1 : 0;
     }
 
-    private static void OnMenuItemClickedNative(IntPtr ctx, IntPtr idPtr)
+    private static void OnMenuItemClickedNative(IntPtr ctx, IntPtr idPtr, int isChecked)
     {
         if (!Instances.TryGetValue(ctx, out var w)) return;
         var id = Marshal.PtrToStringUTF8(idPtr);
         if (id == null) return;
         w.MenuItemClicked?.Invoke(w, id);
         w._menuItemClickedObs.Emit(id);
+
+        if (isChecked < 0) return;
+        var args = new MenuItemCheckedEventArgs(id, isChecked != 0);
+        w.MenuItemCheckedChanged?.Invoke(w, args);
+        w._menuItemCheckedChangedObs.Emit(args);
     }
 
-    private static void OnTrayIconClickedNative(IntPtr ctx)
+    private static void OnTrayIconClickedNative(IntPtr ctx, int button, int x, int y)
     {
         if (!Instances.TryGetValue(ctx, out var w)) return;
-        w.TrayIconClicked?.Invoke(w, EventArgs.Empty);
-        w._trayIconClickedObs.Emit(EventArgs.Empty);
+        var args = new TrayIconClickedEventArgs((TrayMouseButton)button, x, y);
+        w.TrayIconClicked?.Invoke(w, args);
+        w._trayIconClickedObs.Emit(args);
     }
 
     private static void OnCustomSchemeNative(IntPtr ctx, IntPtr urlPtr, IntPtr response)
@@ -1036,6 +1087,7 @@ public class RustinoWindow : IDisposable
         w._navigatingObs.Complete();
         w._windowClosedObs.Complete();
         w._menuItemClickedObs.Complete();
+        w._menuItemCheckedChangedObs.Complete();
         w._trayIconClickedObs.Complete();
     }
 

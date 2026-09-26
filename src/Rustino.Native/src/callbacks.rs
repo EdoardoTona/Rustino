@@ -15,8 +15,10 @@ pub struct RustinoCallbacks {
     pub on_web_message: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>,
     pub on_page_load: Option<unsafe extern "C" fn(*mut c_void, i32, *const c_char)>,
     pub on_navigation: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> i32>,
-    pub on_menu_item_clicked: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
-    pub on_tray_icon_clicked: Option<unsafe extern "C" fn(*mut c_void)>,
+    /// (id, checked): `checked` is the new state of a check item, -1 for other items
+    pub on_menu_item_clicked: Option<unsafe extern "C" fn(*mut c_void, *const c_char, i32)>,
+    /// (button, x, y): 0 left, 1 right, 2 middle; cursor position in physical pixels
+    pub on_tray_icon_clicked: Option<unsafe extern "C" fn(*mut c_void, i32, i32, i32)>,
     pub on_custom_scheme: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *mut SchemeResponse)>,
 }
 

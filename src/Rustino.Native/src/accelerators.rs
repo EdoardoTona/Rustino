@@ -12,25 +12,31 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
 };
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GA_ROOT, GetAncestor, HACCEL, MSG, TranslateAcceleratorW, WM_KEYDOWN, WM_SYSKEYDOWN,
 };
 use wry::WebViewExtWindows;
 
 thread_local! {
-    // (window HWND, menu HACCEL) of the menu bar owned by this event loop thread
-    static MENU: Cell<(isize, isize)> = const { Cell::new((0, 0)) };
+    // (window HWND, menu HACCEL, edit shortcuts of custom items) of the menu bar owned by this
+    // event loop thread
+    static MENU: Cell<(isize, isize, u8)> = const { Cell::new((0, 0, 0)) };
 }
 
-pub fn set_menu(hwnd: isize, menu: Option<&muda::Menu>) {
-    MENU.set((hwnd, menu.map_or(0, |m| m.haccel())));
+/// `custom_edit_shortcuts`: see `BuiltMenu::custom_edit_shortcuts`.
+pub fn set_menu(hwnd: isize, menu: Option<&muda::Menu>, custom_edit_shortcuts: u8) {
+    MENU.set((hwnd, menu.map_or(0, |m| m.haccel()), custom_edit_shortcuts));
 }
 
 /// Returns true when `msg` activated a menu item (the message must then be dropped).
 pub fn translate(msg: &MSG) -> bool {
-    let (hwnd, haccel) = MENU.get();
-    if haccel == 0 || is_edit_shortcut(msg) {
+    let (hwnd, haccel, custom_edit_shortcuts) = MENU.get();
+    // Ctrl+C/X/V/A/Z/Y are left to the focused control, unless a custom item uses them: muda's
+    // predefined edit items would re-send the same keys, looping forever
+    if haccel == 0 || edit_shortcut(msg) & !custom_edit_shortcuts != 0 {
         return false;
     }
     let hwnd = HWND(hwnd as _);
@@ -40,12 +46,16 @@ pub fn translate(msg: &MSG) -> bool {
     }
 }
 
-/// Ctrl+C/X/V/A/Z/Y are left to the focused control: muda's predefined edit items would
-/// re-send the same keys, looping forever.
-fn is_edit_shortcut(msg: &MSG) -> bool {
-    msg.message == WM_KEYDOWN
-        && matches!(msg.wParam.0 as u8, b'C' | b'X' | b'V' | b'A' | b'Z' | b'Y')
-        && unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0
+/// The bit of `menu::EDIT_SHORTCUT_KEYS` for exactly Ctrl+C/X/V/A/Z/Y, 0 for other keys.
+fn edit_shortcut(msg: &MSG) -> u8 {
+    let pressed = |key: VIRTUAL_KEY| unsafe { GetKeyState(key.0 as i32) } < 0;
+    if msg.message != WM_KEYDOWN
+        || !pressed(VK_CONTROL)
+        || [VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(pressed)
+    {
+        return 0;
+    }
+    crate::menu::edit_shortcut_bit(msg.wParam.0 as u8)
 }
 
 pub fn attach_webview(webview: &wry::WebView) {
