@@ -47,7 +47,7 @@ The API is identical. Change two things:
 + var window = new RustinoWindow();
 ```
 
-All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the same.
+All `.Set*()`, `.Center()`, `.Load()`, and `.WaitForClose()` calls remain the same. The types of `ShowMessage` follow the same rename: `PhotinoDialogButtons`, `PhotinoDialogIcon` and `PhotinoDialogResult` become `RustinoDialogButtons`, `RustinoDialogIcon` and `RustinoDialogResult`, with the same values.
 
 For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid-rustinoblazor):
 
@@ -80,7 +80,13 @@ For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid
 | `SetIconFile(string)` | Set window icon from .ico/.png file path |
 | `SetIcon(Stream)` | Set window icon from a .NET stream (e.g. embedded resource) |
 | `Center()` | Center window on the primary monitor |
-| `SetDevToolsEnabled(bool)` | Enable browser developer tools |
+| `SetDevToolsEnabled(bool)` | Enable the web inspector (right click › Inspect, F12 on Windows, `OpenDevTools()`; on macOS see [Developer tools](#webview)) |
+| `SetContextMenuEnabled(bool)` | The browser's context menu on right click (on by default) |
+| `SetBrowserControlsEnabled(bool)` | Windows: the browser's shortcuts, such as F5, Ctrl+R, Ctrl+F and Ctrl+P (on by default) |
+| `SetScrollBarStyle(ScrollBarStyle)` | Windows: `Default` or `FluentOverlay`, the overlay scroll bars of Windows 11 |
+| `SetAcceptFirstMouse(bool)` | macOS: the click that activates the window also reaches the page |
+| `SetBackForwardGesturesEnabled(bool)` | Swipes go back and forward in the history (off by default) |
+| `SetFileDropEnabled(bool)` | Files dropped on the window raise `FileDrop` with their paths (see [Webview](#webview)) |
 | `SetJavascriptClipboardAccessEnabled(bool)` | Allow JS clipboard access |
 | `SetIgnoreCertificateErrorsEnabled(bool)` | Ignore SSL certificate errors |
 | `SetWebSecurityEnabled(bool)` | Enable/disable web security (CORS, etc.) |
@@ -107,6 +113,11 @@ For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid
 | `ExecuteScript(string)` | Evaluate JavaScript in the webview |
 | `SendWebMessage(string)` | Post a message to the webview |
 | `SetZoom(double)` | Set webview zoom factor |
+| `Print()` | Open the system print dialog for the page |
+| `Reload()` | Reload the page (a page loaded from an HTML string is loaded again) |
+| `OpenDevTools()` / `CloseDevTools()` | Open or close the web inspector (needs `SetDevToolsEnabled(true)`; closing isn't supported on Windows; on macOS see [Developer tools](#webview)) |
+| `ClearBrowsingData()` | Delete the cookies, the cache and the storage of every site |
+| `GetCookies(string?)` / `SetCookie(RustinoCookie)` / `DeleteCookie(RustinoCookie)` | Read and change the webview's cookies (see [Webview](#webview)) |
 | `SetBadgeCount(int?, string?, string?)` | Set taskbar/dock badge with optional bg/fg hex colors |
 | `ClearBadge()` | Remove the taskbar/dock badge |
 | `WaitForClose()` | Block until the window is closed |
@@ -154,6 +165,18 @@ string[]? folders = window.ShowSelectFolderDialog(
 ```
 
 All dialogs return `null` when canceled. File filters use the format `new FileFilter("Name", "ext1", "ext2", ...)`.
+
+Message boxes use the same signature as Photino's `ShowMessage`:
+
+```csharp
+var answer = window.ShowMessage("Unsaved changes", "Save the document before closing?",
+    RustinoDialogButtons.YesNoCancel, RustinoDialogIcon.Question);
+if (answer == RustinoDialogResult.Yes) Save();
+```
+
+Buttons: `Ok`, `OkCancel`, `YesNo`, `YesNoCancel`, `RetryCancel`, `AbortRetryIgnore`. Icons: `Info`, `Warning`, `Error`, `Question` (shown as `Info` on macOS). Closing the box without a button returns `Cancel`, or `Ok` when `Ok` is the only button.
+
+While the window runs, every dialog is modal for it: a sheet on macOS, owned by the window on Windows (which can't be clicked until the dialog closes), transient for it on Linux. They can be called from any thread, including the event handlers; before the window runs they have no parent. Message boxes use `MessageBoxW` on Windows (localized buttons), `NSAlert` on macOS and `GtkMessageDialog` on Linux; before the window runs, macOS shows a system alert instead of an `NSAlert`. On Linux file dialogs go through the XDG desktop portal.
 
 ### Notifications
 
@@ -429,7 +452,7 @@ The elements with `data-rustino-drag-region` move the window, and a double click
 
 On Windows and Linux the page covers the resize borders of chromeless windows: its outer 6 pixels resize the window instead. macOS keeps its own resize borders. With `MacTitleBarStyle.Overlay` the page's title bar needs the attribute too.
 
-The drag region script talks to the native side with `window.ipc.postMessage` messages that start with `__rustino:`: they never reach `WebMessageReceived`, so don't use that prefix for your own messages. Any page loaded in the window can send them, and so move, resize or maximize it: if the window shows untrusted pages, call `SetDragRegionsEnabled(false)` before `WaitForClose()` (no script, and the `__rustino:` messages reach `WebMessageReceived` like the others).
+The drag region script talks to the native side with `window.ipc.postMessage` messages that start with `__rustino:` (like the print script on Windows and macOS, see [Webview](#webview)): they never reach `WebMessageReceived`, so don't use that prefix for your own messages. Any page loaded in the window can send them, and so move, resize or maximize it: if the window shows untrusted pages, call `SetDragRegionsEnabled(false)` before `WaitForClose()` (no script, and the `__rustino:` messages reach `WebMessageReceived` like the others, except `__rustino:print`, which only prints).
 
 #### Tray apps on macOS
 
@@ -441,6 +464,55 @@ window.Reopened += (_, hasVisibleWindows) =>
     if (!hasVisibleWindows) window.SetVisible(true).Focus();
 };
 ```
+
+### Webview
+
+Options and events that make the page behave like an app rather than a browser:
+
+```csharp
+window
+    .SetContextMenuEnabled(false)                   // no browser menu on right click
+    .SetBrowserControlsEnabled(false)               // Windows: no F5, Ctrl+R, Ctrl+F, Ctrl+P
+    .SetScrollBarStyle(ScrollBarStyle.FluentOverlay) // Windows 11 scroll bars
+    .SetFileDropEnabled(true);
+
+// Files dropped on the window, with their full paths (HTML5 drag and drop only gives the names)
+window.FileDrop += (_, e) =>
+{
+    if (e.Type == FileDropEventType.Drop)
+        OpenFiles(e.Paths);
+};
+
+// The page's <title> in the title bar
+window.DocumentTitleChanged += (_, title) => window.SetTitle(title);
+
+// Downloads: by default the user chooses where to save each file in the native save dialog
+window.DownloadStarting += (_, e) =>
+{
+    if (e.Url.EndsWith(".exe")) e.Cancel = true;                 // refuse it
+    else if (saveToDownloads) e.DestinationPath = e.SuggestedPath; // save without asking
+};
+window.DownloadCompleted += (_, e) => Console.WriteLine(e.Success ? $"Saved {e.Path}" : $"Not saved: {e.Url}");
+```
+
+Without `SetContextMenuEnabled(false)` right click opens the browser's menu. On macOS and Linux turning it off adds an init script that prevents the default of `contextmenu` events: the page still gets them, e.g. to call `ShowContextMenu`. `SetBrowserControlsEnabled(false)` leaves the menu accelerators and the page's own shortcuts working; WKWebView and WebKitGTK have no browser shortcuts.
+
+**File drop.** With `SetFileDropEnabled(true)`, `FileDrop` reports `Enter` (with the paths), `Over`, `Drop` (with the paths) and `Leave`; positions are in logical (CSS) pixels from the top-left corner of the page. The page doesn't get the dropped files, and the webview doesn't navigate to them. Drags that carry no files (e.g. elements dragged within the page) stay with the page on macOS and Linux; on Windows the webview stops receiving drops altogether, so the page's HTML5 drag and drop doesn't work while file drop is on (a WebView2 limitation of wry).
+
+**Downloads.** `DownloadStarting` runs before the file is written: `SuggestedPath` is where a browser would save it (the Downloads folder, with a name that doesn't replace an existing file). Leave `DestinationPath` null to let the user choose in the save dialog (modal for the window), set it to save there without asking (an existing file is replaced), or set `Cancel`. Don't show dialogs from this handler. The file is downloaded to a temporary folder and moved to its destination when complete, so the save dialog can stay open while it downloads. `DownloadCompleted` reports every download that `DownloadStarting` let through: `Path` is null when the download failed or the user canceled the dialog. Without these events WKWebView wouldn't download at all; WebView2 no longer shows its download bar, nor asks before a page downloads more than one file. WKWebView and WebKitGTK start only the last of several downloads that the same script starts (e.g. consecutive `click()` calls on `<a download>` links): let a moment pass between them, e.g. with `setTimeout`.
+
+**Cookies.** `GetCookies()` returns all the cookies, `GetCookies(url)` those sent to that URL; `SetCookie` adds or replaces a cookie (same name, domain and path), `DeleteCookie` removes it:
+
+```csharp
+window.SetCookie(new RustinoCookie("session", token) { Domain = "example.com", Path = "/", Secure = true, HttpOnly = true });
+var session = window.GetCookies("https://example.com/").FirstOrDefault(c => c.Name == "session");
+```
+
+On Windows, WebView2 applies `SetCookie` and `DeleteCookie` a moment later: a `GetCookies` right after them can still return the previous cookies. On Windows, `GetCookies` also can't run within a webview event (`WebMessageReceived`, `Navigating`, `PageLoaded`, ...), where it throws `InvalidOperationException`: WebView2 answers only after the event returns. Call it afterwards, e.g. `var cookies = await Task.Run(() => window.GetCookies());` in an async handler.
+
+**Printing.** `Print()` and the page's `window.print()` open the system print dialog on every platform. On Windows and macOS an init script sends `window.print()` to it: WebView2 would show its print preview inside the window, cut by small windows (the system dialog of Windows has no preview), and WKWebView would do nothing.
+
+**Developer tools.** With `SetDevToolsEnabled(true)`, right click › Inspect (and F12 on Windows) open the web inspector, and so does `OpenDevTools()`: in its own window on Windows, docked in the window on Linux. On macOS the inspector inside the app needs a private WebKit API, which can get an app rejected from the Mac App Store, so the native library includes it only when built with the `devtools` feature (see [Building from Source](#building-from-source)). Without it, `SetDevToolsEnabled(true)` makes the page inspectable from Safari's Develop menu (macOS 13.3 or later), while `OpenDevTools()` and `CloseDevTools()` do nothing.
 
 ### State Queries
 
@@ -470,6 +542,10 @@ window.Reopened += (_, hasVisibleWindows) =>
 | `MenuItemClicked` | `string` | Fired when a menu item is clicked (the item's ID) |
 | `MenuItemCheckedChanged` | `MenuItemCheckedEventArgs` | Fired after `MenuItemClicked` when the user toggles a check item (`.Id`, `.IsChecked`) |
 | `TrayIconClicked` | `TrayIconClickedEventArgs` | Fired once per click on the tray icon (`.Button`, `.X`, `.Y`); never on Linux |
+| `FileDrop` | `FileDropEventArgs` | Files dragged over the window and dropped, with their full paths (`.Type`, `.Paths`, `.X`, `.Y`); needs `SetFileDropEnabled(true)` |
+| `DocumentTitleChanged` | `string` | The page's `<title>` changed |
+| `DownloadStarting` | `DownloadStartingEventArgs` | A download starts (`.Url`, `.SuggestedPath`; set `.DestinationPath` or `.Cancel`) |
+| `DownloadCompleted` | `DownloadCompletedEventArgs` | A download ended (`.Url`, `.Path`, `.Success`) |
 
 ### Observable Streams (IObservable&lt;T&gt;)
 
@@ -488,6 +564,10 @@ All events are also available as `IObservable<T>` properties for reactive progra
 | `WhenMenuItemClicked` | `IObservable<string>` | Menu item click stream |
 | `WhenMenuItemCheckedChanged` | `IObservable<MenuItemCheckedEventArgs>` | Check item toggle stream |
 | `WhenTrayIconClicked` | `IObservable<TrayIconClickedEventArgs>` | Tray icon click stream |
+| `WhenFileDrop` | `IObservable<FileDropEventArgs>` | File drag and drop stream |
+| `WhenDocumentTitleChanged` | `IObservable<string>` | Document title stream |
+| `WhenDownloadStarting` | `IObservable<DownloadStartingEventArgs>` | Download start stream |
+| `WhenDownloadCompleted` | `IObservable<DownloadCompletedEventArgs>` | Download end stream |
 
 All streams complete automatically when the window closes or is disposed.
 
@@ -579,6 +659,8 @@ See [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor) for a complete ex
 # Build the Rust native library
 cd src/Rustino.Native
 cargo build --release
+# ...or, on macOS, with the web inspector inside the app (private WebKit API, see Developer tools)
+cargo build --release --features devtools
 
 # Build the .NET wrapper
 cd ../Rustino.NET

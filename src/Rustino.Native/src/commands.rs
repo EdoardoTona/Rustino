@@ -27,13 +27,12 @@ pub enum RustinoCommand {
     LoadUrl(String),
     LoadHtml(String),
     SetZoom(f64),
+    Reload,
     SetBackgroundColor(u8, u8, u8, u8),
     /// Run by window_ext before dispatch_command
     Window(crate::window_ext::WindowCommand),
-
-    ShowOpenFileDialog(DialogParams, mpsc::Sender<Option<Vec<String>>>),
-    ShowSaveFileDialog(DialogParams, mpsc::Sender<Option<String>>),
-    ShowSelectFolderDialog(DialogParams, mpsc::Sender<Option<Vec<String>>>),
+    /// Code that needs the event loop thread (see invoke)
+    Invoke(crate::invoke::Task),
 
     SetMenu(String),
     RemoveMenu,
@@ -66,14 +65,6 @@ pub enum RustinoCommand {
     },
 
     Close,
-}
-
-#[derive(Debug)]
-pub struct DialogParams {
-    pub title: Option<String>,
-    pub default_path: Option<String>,
-    pub filters: Vec<(String, Vec<String>)>,
-    pub multi_select: bool,
 }
 
 #[derive(Debug)]

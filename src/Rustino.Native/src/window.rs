@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::ffi::CString;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once, RwLock};
 
@@ -28,6 +29,7 @@ pub struct RustinoWindow {
     pub proxy: RwLock<Option<EventLoopProxy<RustinoCommand>>>,
     pub state: Arc<SharedState>,
     pub ext: crate::window_ext::WindowExt,
+    pub webview_ext: crate::webview_ext::WebViewExt,
 }
 
 impl RustinoWindow {
@@ -39,6 +41,7 @@ impl RustinoWindow {
             proxy: RwLock::new(None),
             state,
             ext: Default::default(),
+            webview_ext: Default::default(),
         }
     }
 
@@ -159,6 +162,13 @@ impl RustinoWindow {
 
         webview_builder = ext.configure_webview(webview_builder);
         let ipc_filter = ext.ipc_filter(event_loop.create_proxy());
+        let print_filter = crate::webview_ext::PrintFilter::new(event_loop.create_proxy());
+        webview_builder = std::mem::take(&mut self.webview_ext).configure(
+            webview_builder,
+            callbacks.context,
+            &self.state,
+            event_loop.create_proxy(),
+        );
 
         for script in &config.initialization_scripts {
             webview_builder = webview_builder.with_initialization_script(script);
@@ -170,19 +180,19 @@ impl RustinoWindow {
             #[cfg(target_os = "windows")]
             let schemes = config.custom_schemes.clone();
             webview_builder = webview_builder.with_ipc_handler(move |req: wry::http::Request<String>| {
-                if ipc_filter.handle(req.body()) {
+                if print_filter.handle(req.body()) || ipc_filter.handle(req.body()) {
                     return;
                 }
                 let source = req.uri().to_string();
                 #[cfg(target_os = "windows")]
                 let source = revert_custom_scheme_workaround(&source, &schemes);
                 if let (Ok(message), Ok(source)) = (CString::new(req.into_body()), CString::new(source)) {
-                    unsafe { cb(ctx, message.as_ptr(), source.as_ptr()) };
+                    crate::invoke::webview_event(|| unsafe { cb(ctx, message.as_ptr(), source.as_ptr()) });
                 }
             });
         } else {
             webview_builder = webview_builder.with_ipc_handler(move |req: wry::http::Request<String>| {
-                ipc_filter.handle(req.body());
+                let _ = print_filter.handle(req.body()) || ipc_filter.handle(req.body());
             });
         }
 
@@ -190,7 +200,7 @@ impl RustinoWindow {
         if let Some(cb) = callbacks.on_navigation {
             webview_builder = webview_builder.with_navigation_handler(move |url| {
                 match CString::new(url) {
-                    Ok(cstr) => unsafe { cb(ctx, cstr.as_ptr()) == 0 },
+                    Ok(cstr) => crate::invoke::webview_event(|| unsafe { cb(ctx, cstr.as_ptr()) == 0 }),
                     Err(_) => true,
                 }
             });
@@ -204,7 +214,7 @@ impl RustinoWindow {
         if let Some(cb) = callbacks.on_custom_scheme {
             for scheme in &config.custom_schemes {
                 webview_builder = webview_builder.with_custom_protocol(scheme.clone(), move |_id, request| {
-                    handle_custom_scheme(request.uri().to_string(), ctx, cb)
+                    crate::invoke::webview_event(|| handle_custom_scheme(request.uri().to_string(), ctx, cb))
                 });
             }
         }
@@ -218,7 +228,7 @@ impl RustinoWindow {
                         wry::PageLoadEvent::Finished => 1,
                     };
                     if let Ok(cstr) = CString::new(url) {
-                        unsafe { cb(ctx, event_code, cstr.as_ptr()) };
+                        crate::invoke::webview_event(|| unsafe { cb(ctx, event_code, cstr.as_ptr()) });
                     }
                 });
         }
@@ -242,7 +252,19 @@ impl RustinoWindow {
         let webview = webview.expect("failed to build webview");
 
         #[cfg(target_os = "windows")]
-        crate::accelerators::attach_webview(&webview);
+        {
+            crate::accelerators::attach_webview(&webview);
+            crate::webview_ext::allow_multiple_downloads(&webview);
+        }
+
+        #[cfg(target_os = "macos")]
+        if config.devtools_enabled {
+            crate::webview_ext::make_inspectable(&webview);
+        }
+
+        // Reachable from the callbacks, which run on this thread
+        let (window, webview) = (Rc::new(window), Rc::new(webview));
+        let running = self.register_running(&window, &webview);
 
         // Initialize shared state from actual window
         let size = window.inner_size();
@@ -361,6 +383,7 @@ impl RustinoWindow {
             }
         });
 
+        drop(running);
         unregister_event_loop(event_loop_key);
         #[cfg(target_os = "windows")]
         crate::accelerators::set_menu(0, None, 0);
@@ -616,9 +639,22 @@ fn dispatch_command(
         }
         RustinoCommand::LoadUrl(url) => {
             let _ = webview.load_url(&url);
+            config.start_html = None;
         }
         RustinoCommand::LoadHtml(html) => {
             let _ = webview.load_html(&html);
+            config.start_html = Some(html);
+        }
+        RustinoCommand::Reload => {
+            // A page loaded from a string has no URL: reloading it would show about:blank
+            match &config.start_html {
+                Some(html) if webview.url().is_ok_and(|url| url == "about:blank") => {
+                    let _ = webview.load_html(html);
+                }
+                _ => {
+                    let _ = webview.reload();
+                }
+            }
         }
         RustinoCommand::SetZoom(factor) => {
             let _ = webview.zoom(factor);
@@ -627,6 +663,7 @@ fn dispatch_command(
             let _ = webview.set_background_color((r, g, b, a));
         }
         RustinoCommand::Window(_) => {} // run by window_ext
+        RustinoCommand::Invoke(task) => task.run(window, webview),
         RustinoCommand::SetBadgeCount { count, bg_r, bg_g, bg_b, fg_r, fg_g, fg_b } => {
             set_badge_count(window, count, [bg_r, bg_g, bg_b], [fg_r, fg_g, fg_b]);
         }
@@ -719,9 +756,6 @@ fn dispatch_command(
                 unsafe { cb(callbacks.context, button, x, y) };
             }
         }
-        RustinoCommand::ShowOpenFileDialog(..) |
-        RustinoCommand::ShowSaveFileDialog(..) |
-        RustinoCommand::ShowSelectFolderDialog(..) => {}
         RustinoCommand::GetMonitors(tx) => {
             update_monitor_cache(window, state);
             let _ = tx.send(state.load_monitors());

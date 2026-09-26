@@ -699,6 +699,7 @@ public partial class RustinoWindow : IDisposable
     }
 
     // --- Dialogs (post-run) ---
+    // While the window runs, dialogs are modal for it (sheets on macOS) and can be called from any thread.
 
     public string[]? ShowOpenFileDialog(
         string? title = null,
@@ -734,6 +735,17 @@ public partial class RustinoWindow : IDisposable
         var ptr = RustinoDllImports.rustino_show_select_folder_dialog(
             _nativeHandle, title, defaultPath, multiSelect ? 1 : 0);
         return ConsumePathResult(ptr);
+    }
+
+    // Photino's ShowMessage. Before the window runs (or after it closes) the message box has no parent.
+    public RustinoDialogResult ShowMessage(
+        string title,
+        string text,
+        RustinoDialogButtons buttons = RustinoDialogButtons.Ok,
+        RustinoDialogIcon icon = RustinoDialogIcon.Info)
+    {
+        return (RustinoDialogResult)RustinoDllImports.rustino_show_message(
+            _nativeHandle, title, text, (int)buttons, (int)icon);
     }
 
     private static string? ConsumeStringResult(IntPtr ptr)
@@ -871,6 +883,7 @@ public partial class RustinoWindow : IDisposable
             if (!_decorations)
                 RustinoDllImports.rustino_set_decorations(_nativeHandle, 0);
             ApplyExtConfiguration();
+            ApplyWebViewConfiguration();
             if (!_visible)
                 RustinoDllImports.rustino_set_visible(_nativeHandle, 0);
             if (_maximized)
@@ -923,6 +936,7 @@ public partial class RustinoWindow : IDisposable
         RustinoDllImports.rustino_set_moved_handler(_nativeHandle, MovedCb);
         RustinoDllImports.rustino_set_focus_changed_handler(_nativeHandle, FocusCb);
         RegisterExtCallbacks();
+        RegisterWebViewCallbacks();
         RustinoDllImports.rustino_set_web_message_received_handler(_nativeHandle, WebMsgCb);
         RustinoDllImports.rustino_set_page_load_handler(_nativeHandle, PageLoadCb);
         RustinoDllImports.rustino_set_navigation_handler(_nativeHandle, NavCb);
@@ -1082,6 +1096,7 @@ public partial class RustinoWindow : IDisposable
     {
         w._sizeChangedObs.Complete();
         CompleteExtObservables(w);
+        CompleteWebViewObservables(w);
         w._locationChangedObs.Complete();
         w._focusChangedObs.Complete();
         w._webMessageObs.Complete();

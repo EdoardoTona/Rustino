@@ -8,11 +8,14 @@ mod accelerators;
 mod callbacks;
 mod commands;
 mod config;
+mod dialogs;
 mod icon;
+mod invoke;
 mod menu;
 mod splash;
 mod state;
 mod util;
+mod webview_ext;
 mod window;
 mod window_ext;
 
@@ -816,211 +819,86 @@ pub unsafe extern "C" fn rustino_set_zoom(instance: *mut RustinoWindow, factor: 
 }
 
 // ---------------------------------------------------------------------------
-// Dialogs (post-run only — dispatched on event loop thread)
+// Dialogs (modal for the window while it runs, see dialogs)
 // ---------------------------------------------------------------------------
 
-fn parse_filters(raw: *const c_char) -> Vec<(String, Vec<String>)> {
-    let s = match unsafe { util::cstr_to_string(raw) } {
-        Some(s) if !s.is_empty() => s,
-        _ => return Vec::new(),
-    };
-    s.split(';')
-        .filter_map(|group| {
-            let (name, exts) = group.split_once('|')?;
-            let extensions = exts.split(',').map(|e| e.trim().to_string()).collect();
-            Some((name.to_string(), extensions))
-        })
-        .collect()
+unsafe fn file_dialog(
+    instance: *mut RustinoWindow,
+    kind: dialogs::FileDialogKind,
+    title: *const c_char,
+    default_path: *const c_char,
+    filters: *const c_char,
+) -> *mut c_char {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let params = dialogs::DialogParams {
+            title: unsafe { util::cstr_to_string(title) },
+            default_path: unsafe { util::cstr_to_string(default_path) },
+            filters: dialogs::parse_filters(unsafe { util::cstr_to_string(filters) }),
+        };
+        let paths = dialogs::file_dialog(unsafe { instance.as_ref() }, kind, params)?;
+        std::ffi::CString::new(paths.join("\n")).ok().map(|s| s.into_raw())
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or(std::ptr::null_mut())
 }
 
-fn apply_dialog_common(
-    dialog: rfd::FileDialog,
-    params: &commands::DialogParams,
-) -> rfd::FileDialog {
-    let mut d = dialog;
-    if let Some(ref title) = params.title {
-        d = d.set_title(title);
-    }
-    if let Some(ref path) = params.default_path {
-        let p = std::path::Path::new(path);
-        if p.is_dir() {
-            d = d.set_directory(p);
-        } else {
-            if let Some(parent) = p.parent() {
-                d = d.set_directory(parent);
-            }
-            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                d = d.set_file_name(name);
-            }
-        }
-    }
-    for (name, exts) in &params.filters {
-        let ext_refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
-        d = d.add_filter(name, &ext_refs);
-    }
-    d
-}
-
-#[cfg(target_os = "windows")]
-fn init_dialog_com() {
-    unsafe {
-        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-#[allow(dead_code)]
-fn init_dialog_com() {}
-
+/// Paths separated by '\n', null when canceled.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_show_open_file_dialog(
-    _instance: *mut RustinoWindow,
+    instance: *mut RustinoWindow,
     title: *const c_char,
     default_path: *const c_char,
     filters: *const c_char,
     multi_select: i32,
 ) -> *mut c_char {
-    catch_unwind(|| {
-        let params = commands::DialogParams {
-            title: unsafe { util::cstr_to_string(title) },
-            default_path: unsafe { util::cstr_to_string(default_path) },
-            filters: parse_filters(filters),
-            multi_select: multi_select != 0,
-        };
-
-        #[cfg(target_os = "macos")]
-        {
-            // On macOS, call directly on main thread to avoid deadlock
-            // (rfd uses dispatch_sync which would deadlock if we spawn a thread)
-            let d = apply_dialog_common(rfd::FileDialog::new(), &params);
-            let result = if params.multi_select {
-                d.pick_files().map(|paths| paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
-            } else {
-                d.pick_file().map(|p| vec![p.to_string_lossy().into_owned()])
-            };
-            let paths = result?;
-            let joined = paths.join("\n");
-            std::ffi::CString::new(joined).ok().map(|s| s.into_raw())
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                init_dialog_com();
-                let d = apply_dialog_common(rfd::FileDialog::new(), &params);
-                let result = if params.multi_select {
-                    d.pick_files().map(|paths| paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
-                } else {
-                    d.pick_file().map(|p| vec![p.to_string_lossy().into_owned()])
-                };
-                let _ = tx.send(result);
-            });
-            let paths = rx.recv().ok()??;
-            let joined = paths.join("\n");
-            std::ffi::CString::new(joined).ok().map(|s| s.into_raw())
-        }
-    })
-    .ok()
-    .flatten()
-    .unwrap_or(std::ptr::null_mut())
+    let kind = dialogs::FileDialogKind::Open { multiple: multi_select != 0 };
+    unsafe { file_dialog(instance, kind, title, default_path, filters) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_show_save_file_dialog(
-    _instance: *mut RustinoWindow,
+    instance: *mut RustinoWindow,
     title: *const c_char,
     default_path: *const c_char,
     filters: *const c_char,
 ) -> *mut c_char {
-    catch_unwind(|| {
-        let params = commands::DialogParams {
-            title: unsafe { util::cstr_to_string(title) },
-            default_path: unsafe { util::cstr_to_string(default_path) },
-            filters: parse_filters(filters),
-            multi_select: false,
-        };
-
-        #[cfg(target_os = "macos")]
-        {
-            // On macOS, call directly on main thread to avoid deadlock
-            // (rfd uses dispatch_sync which would deadlock if we spawn a thread)
-            let d = apply_dialog_common(rfd::FileDialog::new(), &params);
-            let result = d.save_file().map(|p| p.to_string_lossy().into_owned());
-            let path = result?;
-            std::ffi::CString::new(path).ok().map(|s| s.into_raw())
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                init_dialog_com();
-                let d = apply_dialog_common(rfd::FileDialog::new(), &params);
-                let result = d.save_file().map(|p| p.to_string_lossy().into_owned());
-                let _ = tx.send(result);
-            });
-            let path = rx.recv().ok()??;
-            std::ffi::CString::new(path).ok().map(|s| s.into_raw())
-        }
-    })
-    .ok()
-    .flatten()
-    .unwrap_or(std::ptr::null_mut())
+    unsafe { file_dialog(instance, dialogs::FileDialogKind::Save, title, default_path, filters) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_show_select_folder_dialog(
-    _instance: *mut RustinoWindow,
+    instance: *mut RustinoWindow,
     title: *const c_char,
     default_path: *const c_char,
     multi_select: i32,
 ) -> *mut c_char {
-    catch_unwind(|| {
-        let params = commands::DialogParams {
-            title: unsafe { util::cstr_to_string(title) },
-            default_path: unsafe { util::cstr_to_string(default_path) },
-            filters: Vec::new(),
-            multi_select: multi_select != 0,
-        };
+    let kind = dialogs::FileDialogKind::Folder { multiple: multi_select != 0 };
+    unsafe { file_dialog(instance, kind, title, default_path, std::ptr::null()) }
+}
 
-        #[cfg(target_os = "macos")]
-        {
-            // On macOS, call directly on main thread to avoid deadlock
-            // (rfd uses dispatch_sync which would deadlock if we spawn a thread)
-            let d = apply_dialog_common(rfd::FileDialog::new(), &params);
-            let result = if params.multi_select {
-                d.pick_folders().map(|paths| paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
-            } else {
-                d.pick_folder().map(|p| vec![p.to_string_lossy().into_owned()])
-            };
-            let paths = result?;
-            let joined = paths.join("\n");
-            std::ffi::CString::new(joined).ok().map(|s| s.into_raw())
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                init_dialog_com();
-                let d = apply_dialog_common(rfd::FileDialog::new(), &params);
-                let result = if params.multi_select {
-                    d.pick_folders().map(|paths| paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
-                } else {
-                    d.pick_folder().map(|p| vec![p.to_string_lossy().into_owned()])
-                };
-                let _ = tx.send(result);
-            });
-            let paths = rx.recv().ok()??;
-            let joined = paths.join("\n");
-            std::ffi::CString::new(joined).ok().map(|s| s.into_raw())
-        }
-    })
-    .ok()
-    .flatten()
-    .unwrap_or(std::ptr::null_mut())
+/// `buttons`: 0 Ok, 1 OkCancel, 2 YesNo, 3 YesNoCancel, 4 RetryCancel, 5 AbortRetryIgnore.
+/// `icon`: 0 info, 1 warning, 2 error, 3 question. Returns -1 cancel, 0 ok, 1 yes, 2 no, 3 abort,
+/// 4 retry, 5 ignore. `instance` can be null: the dialog then has no parent.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_show_message(
+    instance: *mut RustinoWindow,
+    title: *const c_char,
+    text: *const c_char,
+    buttons: i32,
+    icon: i32,
+) -> i32 {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = dialogs::message(
+            unsafe { instance.as_ref() },
+            unsafe { util::cstr_to_string(title) }.unwrap_or_default(),
+            unsafe { util::cstr_to_string(text) }.unwrap_or_default(),
+            dialogs::MessageButtons::from_i32(buttons),
+            dialogs::MessageIcon::from_i32(icon),
+        );
+        result as i32
+    }))
+    .unwrap_or(dialogs::MessageResult::Cancel as i32)
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,6 +1195,214 @@ pub unsafe extern "C" fn rustino_set_reopen_handler(
     let _ = catch_unwind(|| {
         if let Some(inst) = unsafe { instance.as_mut() } {
             inst.ext.callbacks.on_reopen = handler;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Webview features (see webview_ext)
+// ---------------------------------------------------------------------------
+
+/// Changes a webview option before the window runs; ignored afterwards.
+unsafe fn set_webview_option(instance: *mut RustinoWindow, store: impl FnOnce(&mut webview_ext::WebViewExtOptions)) {
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(inst) = unsafe { instance.as_mut() }
+            && !inst.is_running()
+        {
+            store(&mut inst.webview_ext.options);
+        }
+    }));
+}
+
+/// Runs a webview operation on the event loop thread, without waiting for it.
+unsafe fn post_webview(instance: *mut RustinoWindow, operation: impl FnOnce(&wry::WebView) + Send + 'static) {
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(inst) = unsafe { instance.as_ref() } {
+            inst.post(move |_, webview| operation(webview));
+        }
+    }));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_context_menu_enabled(instance: *mut RustinoWindow, enabled: i32) {
+    unsafe { set_webview_option(instance, |o| o.context_menu = enabled != 0) };
+}
+
+/// Windows only
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_browser_accelerator_keys_enabled(instance: *mut RustinoWindow, enabled: i32) {
+    unsafe { set_webview_option(instance, |o| o.browser_accelerator_keys = enabled != 0) };
+}
+
+/// Windows only: 0 default, 1 Fluent overlay
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_scroll_bar_style(instance: *mut RustinoWindow, style: i32) {
+    unsafe { set_webview_option(instance, |o| o.fluent_overlay_scroll_bars = style == 1) };
+}
+
+/// macOS only
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_accept_first_mouse(instance: *mut RustinoWindow, accept: i32) {
+    unsafe { set_webview_option(instance, |o| o.accept_first_mouse = accept != 0) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_back_forward_gestures_enabled(instance: *mut RustinoWindow, enabled: i32) {
+    unsafe { set_webview_option(instance, |o| o.back_forward_gestures = enabled != 0) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_file_drop_enabled(instance: *mut RustinoWindow, enabled: i32) {
+    unsafe { set_webview_option(instance, |o| o.file_drop = enabled != 0) };
+}
+
+/// The system print dialog
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_print(instance: *mut RustinoWindow) {
+    unsafe { post_webview(instance, webview_ext::print) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_reload(instance: *mut RustinoWindow) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_ref() } {
+            inst.send_command(RustinoCommand::Reload);
+        }
+    });
+}
+
+/// Needs `rustino_set_devtools_enabled`; on macOS also the `devtools` feature
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_open_devtools(instance: *mut RustinoWindow) {
+    unsafe { post_webview(instance, webview_ext::open_devtools) };
+}
+
+/// Not supported on Windows
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_close_devtools(instance: *mut RustinoWindow) {
+    unsafe { post_webview(instance, webview_ext::close_devtools) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_clear_browsing_data(instance: *mut RustinoWindow) {
+    unsafe { post_webview(instance, |webview| { let _ = webview.clear_all_browsing_data(); }) };
+}
+
+/// JSON array of the cookies (all of them with a null `url`). `status`: 0 done, 1 the window
+/// doesn't run or the webview failed, 2 called within a webview event on Windows, where WebView2
+/// answers only after the event.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_get_cookies(
+    instance: *mut RustinoWindow,
+    url: *const c_char,
+    status: *mut i32,
+) -> *mut c_char {
+    let (json, code) = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !invoke::can_wait_for_webview() {
+            return (None, 2);
+        }
+        let json = unsafe { instance.as_ref() }.and_then(|inst| {
+            let url = unsafe { util::cstr_to_string(url) };
+            inst.invoke(move |_, webview| webview_ext::cookies_json(webview, url.as_deref()))?
+        });
+        let code = if json.is_some() { 0 } else { 1 };
+        (json.and_then(|j| std::ffi::CString::new(j).ok()), code)
+    }))
+    .unwrap_or((None, 1));
+    if let Some(status) = unsafe { status.as_mut() } {
+        *status = code;
+    }
+    json.map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+/// Adds or replaces a cookie (JSON object). Returns 1 on success.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_cookie(instance: *mut RustinoWindow, json: *const c_char) -> i32 {
+    unsafe { update_cookie(instance, json, |webview, cookie| webview.set_cookie(cookie).is_ok()) }
+}
+
+/// Deletes a cookie (JSON object: name, domain and path identify it). Returns 1 on success.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_delete_cookie(instance: *mut RustinoWindow, json: *const c_char) -> i32 {
+    unsafe { update_cookie(instance, json, |webview, cookie| webview.delete_cookie(cookie).is_ok()) }
+}
+
+unsafe fn update_cookie(
+    instance: *mut RustinoWindow,
+    json: *const c_char,
+    update: impl FnOnce(&wry::WebView, &wry::cookie::Cookie<'static>) -> bool + Send + 'static,
+) -> i32 {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let inst = unsafe { instance.as_ref() }?;
+        let json = unsafe { util::cstr_to_string(json) }?;
+        let cookie = serde_json::from_str::<webview_ext::CookieData>(&json).ok()?.to_cookie();
+        inst.invoke(move |_, webview| update(webview, &cookie))
+    }))
+    .ok()
+    .flatten()
+    .map_or(0, i32::from)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_file_drop_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, i32, *const c_char, i32, i32)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.webview_ext.callbacks.on_file_drop = handler;
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_document_title_changed_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.webview_ext.callbacks.on_document_title_changed = handler;
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_download_starting_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<
+        unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *mut webview_ext::DownloadResponse) -> i32,
+    >,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.webview_ext.callbacks.on_download_starting = handler;
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_download_completed_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, i32)>,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(inst) = unsafe { instance.as_mut() } {
+            inst.webview_ext.callbacks.on_download_completed = handler;
+        }
+    });
+}
+
+/// Called by the host from within the download starting callback: where to save the file
+/// instead of asking the user.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_download_destination(
+    response: *mut webview_ext::DownloadResponse,
+    path: *const c_char,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(r) = unsafe { response.as_mut() } {
+            r.destination = unsafe { util::cstr_to_string(path) };
         }
     });
 }

@@ -151,6 +151,23 @@ if (OperatingSystem.IsMacOS())
         .AddInitScript("document.documentElement.style.setProperty('--titlebar-inset', '80px');");
 }
 
+// --- Webview: file drop, downloads, document title ---
+var saveToDownloads = false;
+window.FileDrop += (_, e) =>
+{
+    if (e.Type == FileDropEventType.Drop)
+        Log($"Dropped at ({e.X}, {e.Y}):\n{string.Join("\n", e.Paths)}");
+};
+// The window title follows the page's <title>
+window.DocumentTitleChanged += (_, title) => window.SetTitle(title);
+window.DownloadStarting += (_, e) =>
+{
+    // Without a destination the user chooses it in the save dialog
+    if (saveToDownloads) e.DestinationPath = e.SuggestedPath;
+    Log($"Download starting: {Path.GetFileName(e.SuggestedPath)}{(saveToDownloads ? " → " + e.SuggestedPath : "")}");
+};
+window.DownloadCompleted += (_, e) => Log(e.Success ? $"Download saved: {e.Path}" : "Download not saved");
+
 // --- Menu clicks ---
 window.MenuItemClicked += (_, id) =>
 {
@@ -225,6 +242,10 @@ void HandleMessage(string msg)
             break;
 
         // Native window features
+        case var wv when wv.StartsWith("webview:"):
+            HandleWebViewMessage(wv["webview:".Length..]);
+            break;
+
         case var native when native.StartsWith("native:"):
             HandleNativeMessage(native["native:".Length..]);
             break;
@@ -392,6 +413,48 @@ void HandleNativeMessage(string msg)
     }
 }
 
+void HandleWebViewMessage(string msg)
+{
+    switch (msg)
+    {
+        case "message-info":
+            Log($"ShowMessage: {window.ShowMessage("Rustino", "An information message.")}");
+            break;
+        case "message-question":
+            Log($"ShowMessage: {window.ShowMessage("Unsaved changes", "Save the document before closing?", RustinoDialogButtons.YesNoCancel, RustinoDialogIcon.Question)}");
+            break;
+        case "message-warning":
+            Log($"ShowMessage: {window.ShowMessage("Connection lost", "The server doesn't answer.", RustinoDialogButtons.RetryCancel, RustinoDialogIcon.Warning)}");
+            break;
+        case "message-error":
+            Log($"ShowMessage: {window.ShowMessage("Copy failed", "The file is in use.", RustinoDialogButtons.AbortRetryIgnore, RustinoDialogIcon.Error)}");
+            break;
+        case "message-background":
+            // From another thread too the message box is modal for the window
+            Task.Run(() => window.ShowMessage("Background", "Shown from a background thread.")).ContinueWith(t => Log($"ShowMessage: {t.Result}"));
+            break;
+        case "save-to-downloads:1": saveToDownloads = true; break;
+        case "save-to-downloads:0": saveToDownloads = false; break;
+        case "print": window.Print(); break;
+        case "reload": window.Reload(); break;
+        case "devtools": window.OpenDevTools(); break;
+        case "clear-data": window.ClearBrowsingData(); Log("Browsing data cleared"); break;
+        case "cookie-set":
+            window.SetCookie(new RustinoCookie("visits", DateTime.Now.ToString("HH:mm:ss")) { Domain = "example.com", Path = "/", Expires = DateTimeOffset.Now.AddDays(7) });
+            Log("Cookie set for example.com");
+            break;
+        case "cookie-list":
+            // WebMessageReceived is a webview event: on Windows cookies are read once it returns
+            Task.Run(() => window.GetCookies()).ContinueWith(t =>
+                Log(t.Result.Length == 0 ? "No cookies" : string.Join("\n", t.Result.Select(c => $"{c.Name}={c.Value} ({c.Domain}{c.Path}, expires {c.Expires?.ToString("g") ?? "at the end of the session"})"))));
+            break;
+        case "cookie-delete":
+            window.DeleteCookie(new RustinoCookie("visits", "") { Domain = "example.com", Path = "/" });
+            Log("Cookie deleted");
+            break;
+    }
+}
+
 // Chromeless, or decorated with a MacTitleBarStyle (only macOS tells Default and Overlay apart)
 void SetTitleBar(string mode)
 {
@@ -424,7 +487,7 @@ window
     .SetUseOsDefaultSize(false)
     .SetSize(1100, 800)
     .SetMinSize(600, 400)
-    .SetMaxSize(1920, 1080)
+    // .SetMaxSize(1920, 1080)
     .SetResizable(true)
     .Center()
     .SetTopMost(false)
@@ -437,6 +500,10 @@ window
     .SetWebSecurityEnabled(false)
     .SetMediaAutoplayEnabled(true)
     .SetZoomHotkeysEnabled(true)
+    // Right click shows the app's context menu (see the contextmenu listener in the page)
+    .SetContextMenuEnabled(false)
+    .SetScrollBarStyle(ScrollBarStyle.FluentOverlay)
+    .SetFileDropEnabled(true)
     .AddInitScript("""
         window.addEventListener('message', (e) => {
             appendLog('From C#: ' + e.data);
@@ -524,6 +591,7 @@ static string Html() => """
       <div class="tab" data-tab="reactive">Reactive</div>
       <div class="tab" data-tab="voice">Voice Test</div>
       <div class="tab" data-tab="native">Native</div>
+      <div class="tab" data-tab="webview">WebView</div>
     </div>
 
     <div class="panels">
@@ -810,6 +878,55 @@ static string Html() => """
           </div>
         </div>
       </div>
+
+      <!-- WEBVIEW -->
+      <div class="panel" id="tab-webview">
+        <h2>Webview</h2>
+        <div class="card">
+          <h3>Message Boxes</h3>
+          <div class="row">
+            <button class="b" onclick="send('webview:message-info')">Info</button>
+            <button class="g" onclick="send('webview:message-question')">Question (Yes/No/Cancel)</button>
+            <button class="y" onclick="send('webview:message-warning')">Warning (Retry/Cancel)</button>
+            <button class="r" onclick="send('webview:message-error')">Error (Abort/Retry/Ignore)</button>
+            <button class="o" onclick="send('webview:message-background')">From a background thread</button>
+          </div>
+          <p style="color:#888;font-size:0.78rem;margin-top:8px">ShowMessage has the signature of Photino's. Dialogs are modal for the window: a sheet on macOS.</p>
+        </div>
+        <div class="card">
+          <h3>Downloads</h3>
+          <div class="row">
+            <button class="b" onclick="downloadFile('rustino.txt', 'Downloaded from the Rustino showcase.')">Download a File</button>
+            <button class="g" onclick="downloadFile('one.txt', '1'); downloadFile('two.txt', '2')">Download Two Files</button>
+            <label class="flag"><input type="checkbox" onchange="send('webview:save-to-downloads:' + (this.checked ? 1 : 0))"> Save to Downloads without asking</label>
+          </div>
+          <p style="color:#888;font-size:0.78rem;margin-top:8px">DownloadStarting decides where each file goes; without a destination the user chooses it in the save dialog.</p>
+        </div>
+        <div class="card">
+          <h3>File Drop</h3>
+          <p style="color:#888;font-size:0.82rem">Drop files from the desktop or a file manager anywhere on the window: FileDrop reports their full paths in the log.</p>
+        </div>
+        <div class="card">
+          <h3>Page</h3>
+          <div class="row">
+            <input id="doc-title" type="text" value="Rustino — Webview" />
+            <button class="y" onclick="document.title = document.getElementById('doc-title').value">Set document.title</button>
+            <button class="b" onclick="send('webview:print')">Print</button>
+            <button class="b" onclick="send('webview:reload')">Reload</button>
+            <button class="p" onclick="send('webview:devtools')">Open DevTools</button>
+          </div>
+          <p style="color:#888;font-size:0.78rem;margin-top:8px">The window title follows document.title (DocumentTitleChanged). The browser's context menu is off: right click shows the app's menu.</p>
+        </div>
+        <div class="card">
+          <h3>Cookies</h3>
+          <div class="row">
+            <button class="g" onclick="send('webview:cookie-set')">Set Cookie</button>
+            <button class="b" onclick="send('webview:cookie-list')">List Cookies</button>
+            <button class="r" onclick="send('webview:cookie-delete')">Delete Cookie</button>
+            <button class="r" onclick="send('webview:clear-data')">Clear Browsing Data</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Log panel -->
@@ -823,6 +940,16 @@ static string Html() => """
 
     <script>
       function send(msg) { window.ipc.postMessage(msg); }
+
+      // The browser's menu is off: right click shows the app's context menu
+      addEventListener('contextmenu', () => send('show-context-menu'));
+
+      function downloadFile(name, text) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+        a.download = name;
+        a.click();
+      }
 
       // Tabs
       document.querySelectorAll('.tab').forEach(t => {

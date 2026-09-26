@@ -290,6 +290,14 @@ internal static class RustinoDllImports
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? defaultPath,
         int multiSelect);
 
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_show_message(
+        IntPtr instance,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string title,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string text,
+        int buttons,
+        int icon);
+
     // --- Monitors ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
