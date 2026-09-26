@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Larger than any screen: the image would take gigabytes
+pub const MAX_SIZE: u32 = 16384;
+
 pub struct SplashWindow {
     thread_handle: Option<thread::JoinHandle<()>>,
     close_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>,
@@ -8,6 +11,9 @@ pub struct SplashWindow {
 
 impl SplashWindow {
     pub fn new(image_path: &str, width: u32, height: u32) -> Result<Self, String> {
+        if width == 0 || height == 0 || width > MAX_SIZE || height > MAX_SIZE {
+            return Err(format!("Invalid splash size {width}x{height}"));
+        }
         let image_data = std::fs::read(image_path)
             .map_err(|e| format!("Failed to read image file: {}", e))?;
 
@@ -96,8 +102,11 @@ mod windows_splash {
                 None,
                 Some(instance),
                 None,
-            )
-            .unwrap();
+            );
+            let Ok(hwnd) = hwnd else {
+                let _ = UnregisterClassW(class_name, Some(instance));
+                return;
+            };
 
             // Paint the image
             paint_image(hwnd, &img, width, height);
@@ -147,7 +156,9 @@ mod windows_splash {
                 .unwrap_or_default();
 
             if !bits.is_null() {
-                let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (width * height * 4) as usize);
+                // At most MAX_SIZE² pixels: no overflow
+                let len = width as usize * height as usize * 4;
+                let dst = std::slice::from_raw_parts_mut(bits as *mut u8, len);
                 for (dst_px, src_px) in dst.chunks_exact_mut(4).zip(img.pixels()) {
                     let [r, g, b, a] = src_px.0;
                     dst_px[0] = b;

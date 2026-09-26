@@ -2,9 +2,11 @@ namespace Rustino.NET;
 
 public class RustinoSplashscreen : IDisposable
 {
+    private readonly object _lock = new();
     private IntPtr _nativeHandle;
     private string? _tempFilePath;
-    private int _disposed;
+    private bool _closed;
+    private bool _disposed;
 
     public RustinoSplashscreen(string imagePath, int width = 400, int height = 300)
     {
@@ -28,6 +30,7 @@ public class RustinoSplashscreen : IDisposable
             throw new ArgumentOutOfRangeException(nameof(height), "Height must be positive");
         }
 
+        NativeLibraryResolver.EnsureRegistered();
         _nativeHandle = RustinoDllImports.rustino_splash_create(imagePath, width, height);
 
         if (_nativeHandle == IntPtr.Zero)
@@ -81,21 +84,33 @@ public class RustinoSplashscreen : IDisposable
         }
     }
 
+    // Hides the splashscreen; Dispose() still frees it.
     public void Close()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        lock (_lock)
         {
-            if (_nativeHandle != IntPtr.Zero)
-            {
-                RustinoDllImports.rustino_splash_close(_nativeHandle);
-            }
+            if (_closed || _nativeHandle == IntPtr.Zero)
+                return;
+            _closed = true;
+            RustinoDllImports.rustino_splash_close(_nativeHandle);
         }
     }
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        lock (_lock)
         {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _closed = true;
+
             if (_nativeHandle != IntPtr.Zero)
             {
                 RustinoDllImports.rustino_splash_dtor(_nativeHandle);
@@ -120,12 +135,10 @@ public class RustinoSplashscreen : IDisposable
                 _tempFilePath = null;
             }
         }
-
-        GC.SuppressFinalize(this);
     }
 
     ~RustinoSplashscreen()
     {
-        Dispose();
+        Dispose(disposing: false);
     }
 }

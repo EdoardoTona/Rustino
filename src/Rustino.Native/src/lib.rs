@@ -1700,26 +1700,27 @@ pub unsafe extern "C" fn rustino_splash_create(
     width: i32,
     height: i32,
 ) -> *mut splash::SplashWindow {
-    let path = match unsafe { util::cstr_to_string(image_path) } {
-        Some(p) => p,
-        None => return std::ptr::null_mut(),
-    };
-    let w = width.max(1) as u32;
-    let h = height.max(1) as u32;
-
-    match splash::SplashWindow::new(&path, w, h) {
-        Ok(splash) => Box::into_raw(Box::new(splash)),
-        Err(_) => std::ptr::null_mut(),
-    }
+    catch_unwind(|| {
+        let path = unsafe { util::cstr_to_string(image_path) }?;
+        let w = width.max(1) as u32;
+        let h = height.max(1) as u32;
+        let splash = splash::SplashWindow::new(&path, w, h).ok()?;
+        Some(Box::into_raw(Box::new(splash)))
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(std::ptr::null_mut())
 }
 
 /// # Safety
 /// `splash` must be a valid pointer returned from `rustino_splash_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_splash_close(splash: *mut splash::SplashWindow) {
-    if let Some(s) = unsafe { splash.as_ref() } {
-        s.close();
-    }
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(s) = unsafe { splash.as_ref() } {
+            s.close();
+        }
+    }));
 }
 
 /// # Safety
@@ -1727,11 +1728,13 @@ pub unsafe extern "C" fn rustino_splash_close(splash: *mut splash::SplashWindow)
 /// After calling this, the pointer is invalid and must not be used again.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_splash_dtor(splash: *mut splash::SplashWindow) {
-    if !splash.is_null() {
-        unsafe {
-            drop(Box::from_raw(splash));
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !splash.is_null() {
+            unsafe {
+                drop(Box::from_raw(splash));
+            }
         }
-    }
+    }));
 }
 
 #[cfg(test)]
