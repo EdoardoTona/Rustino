@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 pub struct SharedState {
@@ -9,6 +9,9 @@ pub struct SharedState {
     pub is_focused: AtomicBool,
     position: AtomicU64,
     size: AtomicU64,
+    /// 0 until the window runs, 1 light, 2 dark
+    theme: AtomicU8,
+    scale_factor: AtomicU64,
     monitors_json: Mutex<String>,
     current_monitor_json: Mutex<String>,
 }
@@ -23,6 +26,8 @@ impl SharedState {
             is_focused: AtomicBool::new(true),
             position: AtomicU64::new(0),
             size: AtomicU64::new(pack_u32(width, height)),
+            theme: AtomicU8::new(0),
+            scale_factor: AtomicU64::new(1f64.to_bits()),
             monitors_json: Mutex::new(String::new()),
             current_monitor_json: Mutex::new(String::new()),
         }
@@ -42,6 +47,23 @@ impl SharedState {
 
     pub fn load_size(&self) -> (u32, u32) {
         unpack_u32(self.size.load(Ordering::Acquire))
+    }
+
+    /// Returns whether the theme changed.
+    pub fn store_theme(&self, theme: u8) -> bool {
+        self.theme.swap(theme, Ordering::AcqRel) != theme
+    }
+
+    pub fn load_theme(&self) -> u8 {
+        self.theme.load(Ordering::Acquire)
+    }
+
+    pub fn store_scale_factor(&self, scale_factor: f64) {
+        self.scale_factor.store(scale_factor.to_bits(), Ordering::Release);
+    }
+
+    pub fn load_scale_factor(&self) -> f64 {
+        f64::from_bits(self.scale_factor.load(Ordering::Acquire))
     }
 
     pub fn store_monitors(&self, monitors: &str, current: &str) {
@@ -124,6 +146,24 @@ mod tests {
         let state = SharedState::new(800, 600);
         state.store_size(1920, 1080);
         assert_eq!(state.load_size(), (1920, 1080));
+    }
+
+    #[test]
+    fn theme_reports_changes() {
+        let state = SharedState::new(800, 600);
+        assert_eq!(state.load_theme(), 0);
+        assert!(state.store_theme(2));
+        assert!(!state.store_theme(2));
+        assert!(state.store_theme(1));
+        assert_eq!(state.load_theme(), 1);
+    }
+
+    #[test]
+    fn scale_factor_roundtrip() {
+        let state = SharedState::new(800, 600);
+        assert_eq!(state.load_scale_factor(), 1.0);
+        state.store_scale_factor(1.75);
+        assert_eq!(state.load_scale_factor(), 1.75);
     }
 
     #[test]

@@ -28,6 +28,7 @@ pub struct RustinoWindow {
     pub callbacks: RustinoCallbacks,
     pub proxy: RwLock<Option<EventLoopProxy<RustinoCommand>>>,
     pub state: Arc<SharedState>,
+    pub ext: crate::window_ext::WindowExt,
 }
 
 impl RustinoWindow {
@@ -38,6 +39,7 @@ impl RustinoWindow {
             callbacks: RustinoCallbacks::default(),
             proxy: RwLock::new(None),
             state,
+            ext: Default::default(),
         }
     }
 
@@ -98,6 +100,9 @@ impl RustinoWindow {
             window_builder = window_builder.with_background_color(color);
         }
 
+        let ext = std::mem::take(&mut self.ext);
+        window_builder = ext.configure_window(window_builder);
+
         let window = window_builder
             .build(&event_loop)
             .expect("failed to build window");
@@ -151,6 +156,9 @@ impl RustinoWindow {
             webview_builder = webview_builder.with_hotkeys_zoom(true);
         }
 
+        webview_builder = ext.configure_webview(webview_builder);
+        let ipc_filter = ext.ipc_filter(event_loop.create_proxy());
+
         for script in &config.initialization_scripts {
             webview_builder = webview_builder.with_initialization_script(script);
         }
@@ -159,9 +167,16 @@ impl RustinoWindow {
         let ctx = callbacks.context;
         if let Some(cb) = callbacks.on_web_message {
             webview_builder = webview_builder.with_ipc_handler(move |req: wry::http::Request<String>| {
+                if ipc_filter.handle(req.body()) {
+                    return;
+                }
                 if let Ok(cstr) = CString::new(req.into_body()) {
                     unsafe { cb(ctx, cstr.as_ptr()) };
                 }
+            });
+        } else {
+            webview_builder = webview_builder.with_ipc_handler(move |req: wry::http::Request<String>| {
+                ipc_filter.handle(req.body());
             });
         }
 
@@ -221,6 +236,7 @@ impl RustinoWindow {
             .store(config.visible, Ordering::Release);
 
         update_monitor_cache(&window, &self.state);
+        let mut ext = ext.start(&window, &self.state, callbacks.context, event_loop.create_proxy());
 
         let state = Arc::clone(&self.state);
 
@@ -261,10 +277,14 @@ impl RustinoWindow {
 
         let mut tray: Option<tray_icon::TrayIcon> = None;
 
-        event_loop.run_return(move |event, _, control_flow| {
+        event_loop.run_return(move |event, target, control_flow| {
             if *control_flow != ControlFlow::Exit {
                 *control_flow = ControlFlow::Wait;
             }
+
+            let Some(event) = ext.handle_event(event, target, &window, &webview) else {
+                return;
+            };
 
             #[allow(clippy::collapsible_match)]
             match event {
@@ -545,6 +565,7 @@ fn dispatch_command(
         RustinoCommand::SetBackgroundColor(r, g, b, a) => {
             let _ = webview.set_background_color((r, g, b, a));
         }
+        RustinoCommand::Window(_) => {} // run by window_ext
         RustinoCommand::SetBadgeCount { count, bg_r, bg_g, bg_b, fg_r, fg_g, fg_b } => {
             set_badge_count(window, count, [bg_r, bg_g, bg_b], [fg_r, fg_g, fg_b]);
         }
@@ -737,6 +758,10 @@ fn set_badge_count(_window: &tao::window::Window, count: Option<u32>, _bg: [u8; 
     #[cfg(target_os = "macos")]
     {
         set_badge_count_macos(count);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::window_ext::launcher::set_count(count);
     }
 }
 

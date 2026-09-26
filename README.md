@@ -213,7 +213,7 @@ window.RemoveTrayIcon();
 
 ### Taskbar Badge
 
-Set a numeric badge on the taskbar icon (Windows) or dock icon (macOS):
+Set a numeric badge on the taskbar icon (Windows) or dock icon (macOS, Linux):
 
 ```csharp
 // Set badge with default colors (red background, white text)
@@ -229,6 +229,8 @@ window.ClearBadge();
 On Windows, this renders an overlay icon on the taskbar button using a 32px anti-aliased circle with bold Segoe UI text. Numbers above 99 display as "99+". The `background` and `foreground` parameters accept `#RRGGBB` hex strings and default to `#E01E5A` (red) and `#FFFFFF` (white).
 
 On macOS, the native `dockTile.setBadgeLabel` API is used — color parameters are ignored as the OS controls badge appearance.
+
+On Linux, the count goes to the dock through the Unity LauncherEntry D-Bus API (Ubuntu Dock, Dash to Dock, KDE Plasma). The dock finds the app by its `.desktop` file: `<executable name>.desktop` unless you call `SetDesktopFileName("com.example.App.desktop")`.
 
 ### Monitors
 
@@ -252,6 +254,80 @@ window.SetPosition(
 ```
 
 `MonitorInfo` properties: `Name`, `X`, `Y`, `Width`, `Height`, `ScaleFactor`, `IsPrimary`.
+
+### Native Window Features
+
+```csharp
+window
+    .SetTheme(WindowTheme.Dark)                     // title bar, native controls, prefers-color-scheme
+    .SetMacTitleBarStyle(MacTitleBarStyle.Overlay)  // macOS: the page extends under the traffic lights
+    .SetMacTrafficLightPosition(14, 12);
+
+window.ThemeChanged += (_, theme) => Console.WriteLine($"Now {theme}");
+
+// Later, while the window runs
+window.SetProgressBar(ProgressBarState.Normal, 40);   // taskbar button / Dock icon
+window.RequestUserAttention(UserAttentionType.Critical);
+```
+
+The platform limits below hold both before the window runs and while it runs.
+
+| Method / property | Description |
+|---|---|
+| `SetTheme(WindowTheme)` | `System`, `Light` or `Dark`. Windows applies it to the window (dark title bar) and to WebView2; macOS and Linux to the whole app |
+| `Theme` | Current theme, `Light` or `Dark` |
+| `ScaleFactor` | Physical pixels per logical pixel on the window's monitor |
+| `SetProgressBar(ProgressBarState, int?)` / `ClearProgressBar()` | Progress on the taskbar button (Windows), the Dock icon (macOS) or the dock icon (Linux, LauncherEntry: see [Taskbar Badge](#taskbar-badge)) |
+| `RequestUserAttention(UserAttentionType)` / `CancelUserAttentionRequest()` | Flashes the taskbar button, bounces the Dock icon or sets the urgency hint, until the app is focused |
+| `SetShadow(bool)` | Window shadow (Windows: chromeless windows; macOS: all windows) |
+| `SetSkipTaskbar(bool)` | No taskbar button, for apps that live in the tray. On macOS the app leaves the Dock and the app switcher |
+| `SetContentProtection(bool)` | Keeps the window out of screenshots and recordings (Windows, macOS) |
+| `SetVisibleOnAllWorkspaces(bool)` | Shows the window on every virtual desktop (macOS, Linux) |
+| `SetClosable(bool)` / `SetMinimizable(bool)` / `SetMaximizable(bool)` | Enable the title bar buttons. Linux: only `SetClosable`, as a request the window manager may ignore; minimize and maximize can't be disabled |
+| `SetAlwaysOnBottom(bool)` | Keeps the window below the others, replacing `SetTopMost`. Linux: a request to the window manager, not supported on Wayland |
+| `SetIgnoreCursorEvents(bool)` | Mouse clicks go through the window, for overlays |
+| `SetMacTitleBarStyle(MacTitleBarStyle)` | macOS, pre-run: `Default`, `Transparent` or `Overlay` (no title, the page under the traffic lights, like Slack or VS Code) |
+| `SetMacTrafficLightPosition(double, double)` | macOS: position of the traffic lights, in logical pixels |
+| `SetDesktopFileName(string)` | Linux: `.desktop` file of the app, for the dock badge and progress |
+| `SetDragRegionsEnabled(bool)` | Pre-run: drag regions and edge resizing from the page (on by default, see below) |
+| `DragWindow()` / `DragResizeWindow(ResizeDirection)` | Move or resize the window with the mouse (call them while the left button is down) |
+
+| Event | Args | Description |
+|---|---|---|
+| `ThemeChanged` | `WindowTheme` | The theme changed, by the system or by `SetTheme` |
+| `ScaleFactorChanged` | `ScaleFactorChangedEventArgs` | The window moved to a monitor with another scale (`.ScaleFactor`, `.Width`, `.Height`) |
+| `UrlsOpened` | `string[]` | macOS: the app was asked to open files or URLs (file associations and URL schemes of the app bundle) |
+| `Reopened` | `bool` | macOS: Dock icon clicked; `false` when no window is visible, e.g. hidden in the tray |
+
+Each event also has an observable: `WhenThemeChanged`, `WhenScaleFactorChanged`, `WhenUrlsOpened`, `WhenReopened`.
+
+On Linux with the X11 backend WebKitGTK restyles the page when the theme changes, but doesn't fire the `change` event of `matchMedia('(prefers-color-scheme: dark)')`: scripts that need to know should listen to `ThemeChanged` instead.
+
+#### Drag regions for chromeless windows
+
+The elements with `data-rustino-drag-region` move the window, and a double click maximizes it. The attribute applies to the element itself, not to its children, so the buttons of a custom title bar stay clickable:
+
+```html
+<header data-rustino-drag-region>
+  <span data-rustino-drag-region>My App</span>
+  <button onclick="window.ipc.postMessage('close')">✕</button>
+</header>
+```
+
+On Windows and Linux the page covers the resize borders of chromeless windows: its outer 6 pixels resize the window instead. macOS keeps its own resize borders. With `MacTitleBarStyle.Overlay` the page's title bar needs the attribute too.
+
+The drag region script talks to the native side with `window.ipc.postMessage` messages that start with `__rustino:`: they never reach `WebMessageReceived`, so don't use that prefix for your own messages. Any page loaded in the window can send them, and so move, resize or maximize it: if the window shows untrusted pages, call `SetDragRegionsEnabled(false)` before `WaitForClose()` (no script, and the `__rustino:` messages reach `WebMessageReceived` like the others).
+
+#### Tray apps on macOS
+
+A click on the Dock icon raises `Reopened`: show the window again when it was hidden in the tray.
+
+```csharp
+window.Reopened += (_, hasVisibleWindows) =>
+{
+    if (!hasVisibleWindows) window.SetVisible(true).Focus();
+};
+```
 
 ### State Queries
 

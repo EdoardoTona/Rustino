@@ -24,6 +24,8 @@ pub enum RustinoCommand {
     LoadHtml(String),
     SetZoom(f64),
     SetBackgroundColor(u8, u8, u8, u8),
+    /// Run by window_ext before dispatch_command
+    Window(crate::window_ext::WindowCommand),
 
     ShowOpenFileDialog(DialogParams, mpsc::Sender<Option<Vec<String>>>),
     ShowSaveFileDialog(DialogParams, mpsc::Sender<Option<String>>),
