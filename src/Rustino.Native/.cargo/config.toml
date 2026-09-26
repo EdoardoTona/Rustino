@@ -1,0 +1,4 @@
+# Link the C runtime statically on Windows: rustino_native.dll then loads on machines
+# without the Visual C++ Redistributable
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
