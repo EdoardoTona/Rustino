@@ -199,9 +199,17 @@ impl RustinoWindow {
             webview_builder = webview_builder.with_html(html);
         }
 
-        let webview = webview_builder
-            .build(&window)
-            .expect("failed to build webview");
+        // On Linux the webview goes in tao's GTK box, next to the menu bar: `build` only
+        // supports X11 and would draw over the menu bar
+        #[cfg(target_os = "linux")]
+        let webview = {
+            use tao::platform::unix::WindowExtUnix;
+            use wry::WebViewBuilderExtUnix;
+            webview_builder.build_gtk(window.default_vbox().expect("tao window without GTK box"))
+        };
+        #[cfg(not(target_os = "linux"))]
+        let webview = webview_builder.build(&window);
+        let webview = webview.expect("failed to build webview");
 
         // Initialize shared state from actual window
         let size = window.inner_size();
@@ -681,7 +689,7 @@ fn attach_menu_to_window(menu: &muda::Menu, _window: &tao::window::Window) {
     #[cfg(target_os = "linux")]
     {
         use tao::platform::unix::WindowExtUnix;
-        let _ = menu.init_for_gtk_window(_window.gtk_window(), None::<&gtk::Container>);
+        let _ = menu.init_for_gtk_window(_window.gtk_window(), _window.default_vbox());
     }
 }
 
