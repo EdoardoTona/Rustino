@@ -19,22 +19,22 @@ internal static class RustinoWebViewDllImports
     private const string Lib = NativeLibraryResolver.LibName;
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_context_menu_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_context_menu_enabled(IntPtr instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_browser_accelerator_keys_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_browser_accelerator_keys_enabled(IntPtr instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_scroll_bar_style(IntPtr instance, int style);
+    internal static extern int rustino_set_scroll_bar_style(IntPtr instance, int style);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_accept_first_mouse(IntPtr instance, int accept);
+    internal static extern int rustino_set_accept_first_mouse(IntPtr instance, int accept);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_back_forward_gestures_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_back_forward_gestures_enabled(IntPtr instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_file_drop_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_file_drop_enabled(IntPtr instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_print(IntPtr instance);

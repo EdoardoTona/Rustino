@@ -60,6 +60,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetTheme(WindowTheme theme)
     {
+        ThrowIfDisposed();
         _theme = theme;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_theme(_nativeHandle, (int)theme);
@@ -81,6 +82,7 @@ public partial class RustinoWindow
     /// <param name="progress">0-100; null keeps the current value.</param>
     public RustinoWindow SetProgressBar(ProgressBarState state, int? progress = null)
     {
+        ThrowIfDisposed();
         if (progress is < 0 or > 100)
             throw new ArgumentOutOfRangeException(nameof(progress), "Progress must be between 0 and 100.");
         if (_nativeHandle != IntPtr.Zero)
@@ -96,6 +98,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow RequestUserAttention(UserAttentionType type = UserAttentionType.Informational)
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_request_user_attention(_nativeHandle, (int)type);
         return this;
@@ -104,6 +107,7 @@ public partial class RustinoWindow
     /// <summary>Stops a <see cref="RequestUserAttention"/> (not supported on macOS).</summary>
     public RustinoWindow CancelUserAttentionRequest()
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_request_user_attention(_nativeHandle, 0);
         return this;
@@ -115,6 +119,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetShadow(bool shadow)
     {
+        ThrowIfDisposed();
         _shadow = shadow;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_shadow(_nativeHandle, shadow ? 1 : 0);
@@ -127,6 +132,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetSkipTaskbar(bool skip)
     {
+        ThrowIfDisposed();
         _skipTaskbar = skip;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_skip_taskbar(_nativeHandle, skip ? 1 : 0);
@@ -136,6 +142,7 @@ public partial class RustinoWindow
     /// <summary>Keeps the window out of screenshots and screen recordings (Windows, macOS).</summary>
     public RustinoWindow SetContentProtection(bool enabled)
     {
+        ThrowIfDisposed();
         _contentProtection = enabled;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_content_protection(_nativeHandle, enabled ? 1 : 0);
@@ -145,6 +152,7 @@ public partial class RustinoWindow
     /// <summary>Shows the window on every virtual desktop (macOS, Linux).</summary>
     public RustinoWindow SetVisibleOnAllWorkspaces(bool visible)
     {
+        ThrowIfDisposed();
         _visibleOnAllWorkspaces = visible;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_visible_on_all_workspaces(_nativeHandle, visible ? 1 : 0);
@@ -154,6 +162,7 @@ public partial class RustinoWindow
     /// <summary>Enables the close button of the title bar (Linux: a request that the window manager may ignore).</summary>
     public RustinoWindow SetClosable(bool closable)
     {
+        ThrowIfDisposed();
         _closable = closable;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_closable(_nativeHandle, closable ? 1 : 0);
@@ -163,6 +172,7 @@ public partial class RustinoWindow
     /// <summary>Enables the minimize button of the title bar. Not supported on Linux.</summary>
     public RustinoWindow SetMinimizable(bool minimizable)
     {
+        ThrowIfDisposed();
         _minimizable = minimizable;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_minimizable(_nativeHandle, minimizable ? 1 : 0);
@@ -172,6 +182,7 @@ public partial class RustinoWindow
     /// <summary>Enables the maximize (zoom on macOS) button of the title bar. Not supported on Linux.</summary>
     public RustinoWindow SetMaximizable(bool maximizable)
     {
+        ThrowIfDisposed();
         _maximizable = maximizable;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_maximizable(_nativeHandle, maximizable ? 1 : 0);
@@ -184,6 +195,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetAlwaysOnBottom(bool onBottom)
     {
+        ThrowIfDisposed();
         _alwaysOnBottom = onBottom;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_always_on_bottom(_nativeHandle, onBottom ? 1 : 0);
@@ -193,6 +205,7 @@ public partial class RustinoWindow
     /// <summary>Lets the mouse clicks through the window to the windows below it, for overlays.</summary>
     public RustinoWindow SetIgnoreCursorEvents(bool ignore)
     {
+        ThrowIfDisposed();
         _ignoreCursorEvents = ignore;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_ignore_cursor_events(_nativeHandle, ignore ? 1 : 0);
@@ -205,6 +218,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetMacTitleBarStyle(MacTitleBarStyle style)
     {
+        ThrowIfDisposed();
         _macTitleBarStyle = style;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_mac_title_bar_style(_nativeHandle, (int)style);
@@ -218,15 +232,15 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetDragRegionsEnabled(bool enabled)
     {
-        _dragRegions = enabled;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_drag_regions_enabled(_nativeHandle, enabled ? 1 : 0);
+        SetCreationOnly(ref _dragRegions, enabled, nameof(SetDragRegionsEnabled),
+            static (instance, value) => RustinoExtDllImports.rustino_set_drag_regions_enabled(instance, value ? 1 : 0));
         return this;
     }
 
     /// <summary>Position of the macOS traffic lights, in logical pixels from the top-left corner.</summary>
     public RustinoWindow SetMacTrafficLightPosition(double x, double y)
     {
+        ThrowIfDisposed();
         _trafficLightPosition = (x, y);
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_traffic_light_position(_nativeHandle, x, y);
@@ -239,6 +253,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetDesktopFileName(string fileName)
     {
+        ThrowIfDisposed();
         _desktopFileName = fileName;
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_set_desktop_file_name(_nativeHandle, fileName);
@@ -251,6 +266,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow DragWindow()
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_drag_window(_nativeHandle);
         return this;
@@ -259,6 +275,7 @@ public partial class RustinoWindow
     /// <summary>Resizes the window with the mouse from an edge; call it while the left button is down.</summary>
     public RustinoWindow DragResizeWindow(ResizeDirection direction)
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoExtDllImports.rustino_drag_resize_window(_nativeHandle, (int)direction);
         return this;
@@ -315,36 +332,32 @@ public partial class RustinoWindow
         w._reopenedObs.Complete();
     }
 
-    private static void OnThemeChangedNative(IntPtr ctx, int theme)
+    private static void OnThemeChangedNative(IntPtr ctx, int theme) => GuardNativeCallback(ctx, nameof(OnThemeChangedNative), w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return;
         var value = (WindowTheme)theme;
         w.ThemeChanged?.Invoke(w, value);
         w._themeChangedObs.Emit(value);
-    }
+    });
 
-    private static void OnScaleFactorChangedNative(IntPtr ctx, double scaleFactor, int width, int height)
+    private static void OnScaleFactorChangedNative(IntPtr ctx, double scaleFactor, int width, int height) => GuardNativeCallback(ctx, nameof(OnScaleFactorChangedNative), w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return;
         var args = new ScaleFactorChangedEventArgs(scaleFactor, width, height);
         w.ScaleFactorChanged?.Invoke(w, args);
         w._scaleFactorChangedObs.Emit(args);
-    }
+    });
 
-    private static void OnUrlsOpenedNative(IntPtr ctx, IntPtr urlsPtr)
+    private static void OnUrlsOpenedNative(IntPtr ctx, IntPtr urlsPtr) => GuardNativeCallback(ctx, nameof(OnUrlsOpenedNative), w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return;
         var urls = Marshal.PtrToStringUTF8(urlsPtr)?.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (urls is not { Length: > 0 }) return;
         w.UrlsOpened?.Invoke(w, urls);
         w._urlsOpenedObs.Emit(urls);
-    }
+    });
 
-    private static void OnReopenNative(IntPtr ctx, int hasVisibleWindows)
+    private static void OnReopenNative(IntPtr ctx, int hasVisibleWindows) => GuardNativeCallback(ctx, nameof(OnReopenNative), w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return;
         var visible = hasVisibleWindows != 0;
         w.Reopened?.Invoke(w, visible);
         w._reopenedObs.Emit(visible);
-    }
+    });
 }

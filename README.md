@@ -99,6 +99,13 @@ For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid
 | `Load(Uri)` / `Load(string)` | Navigate to a URL or local file |
 | `LogVerbosity` | Set log verbosity (0 = silent) |
 
+`Load()` creates the native instance. Creation settings other than `LogVerbosity` can still be changed after
+`Load()` and before the first `WaitForClose()`; Rustino applies them to the native configuration. Set `LogVerbosity`
+before `Load()` because it is passed to the native constructor. Settings that affect window or webview creation
+throw `InvalidOperationException` if changed after `WaitForClose()` starts. Runtime commands such as `SetMenu()`,
+`ExecuteScript()` and `SendWebMessage()` can be sent before `WaitForClose()` and are delivered in order once the
+window and webview exist.
+
 ### Runtime (post-run)
 
 | Method | Description |
@@ -120,7 +127,7 @@ For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid
 | `GetCookies(string?)` / `SetCookie(RustinoCookie)` / `DeleteCookie(RustinoCookie)` | Read and change the webview's cookies (see [Webview](#webview)) |
 | `SetBadgeCount(int?, string?, string?)` | Set taskbar/dock badge with optional bg/fg hex colors |
 | `ClearBadge()` | Remove the taskbar/dock badge |
-| `WaitForClose()` | Block until the window is closed |
+| `WaitForClose()` | Block until the window is closed; throws `RustinoException` if native window or webview creation fails |
 | `Dispose()` | Release native resources (`RustinoWindow` implements `IDisposable`) |
 
 ### Custom Schemes
@@ -532,6 +539,7 @@ On Windows, WebView2 applies `SetCookie` and `DeleteCookie` a moment later: a `G
 |---|---|---|
 | `WindowClosing` | `CancelEventArgs` | Fired before close (set `Cancel = true` to prevent) |
 | `WindowClosed` | `EventArgs` | Fired after the window is destroyed |
+| `UnhandledCallbackException` | `NativeCallbackExceptionEventArgs` | A handler, observable observer, or logger threw while Rustino.Native was calling into .NET (`.CallbackName`, `.Exception`) |
 | `SizeChanged` | `SizeEventArgs` | Fired on resize (`.Width`, `.Height`) |
 | `LocationChanged` | `PointEventArgs` | Fired on move (`.X`, `.Y`) |
 | `FocusChanged` | `bool` | Fired on focus/blur |
@@ -546,6 +554,12 @@ On Windows, WebView2 applies `SetCookie` and `DeleteCookie` a moment later: a `G
 | `DocumentTitleChanged` | `string` | The page's `<title>` changed |
 | `DownloadStarting` | `DownloadStartingEventArgs` | A download starts (`.Url`, `.SuggestedPath`; set `.DestinationPath` or `.Cancel`) |
 | `DownloadCompleted` | `DownloadCompletedEventArgs` | A download ended (`.Url`, `.Path`, `.Success`) |
+
+Exceptions thrown from a native callback are caught before they can cross the Rust/.NET boundary. Rustino logs
+them through the configured `ILogger` and raises `UnhandledCallbackException`; exceptions thrown by that event
+are also caught. A closing-handler exception allows the window to close, a navigation-handler exception allows
+the navigation, and a download-starting exception cancels the download. A custom-scheme handler exception leaves
+the response empty, which Rustino returns as HTTP 404.
 
 ### Observable Streams (IObservable&lt;T&gt;)
 

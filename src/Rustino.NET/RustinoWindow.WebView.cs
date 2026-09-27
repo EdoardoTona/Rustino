@@ -56,9 +56,8 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetContextMenuEnabled(bool enabled)
     {
-        _contextMenuEnabled = enabled;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoWebViewDllImports.rustino_set_context_menu_enabled(_nativeHandle, enabled ? 1 : 0);
+        SetCreationOnly(ref _contextMenuEnabled, enabled, nameof(SetContextMenuEnabled),
+            static (instance, value) => RustinoWebViewDllImports.rustino_set_context_menu_enabled(instance, value ? 1 : 0));
         return this;
     }
 
@@ -69,9 +68,8 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetBrowserControlsEnabled(bool enabled)
     {
-        _browserControlsEnabled = enabled;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoWebViewDllImports.rustino_set_browser_accelerator_keys_enabled(_nativeHandle, enabled ? 1 : 0);
+        SetCreationOnly(ref _browserControlsEnabled, enabled, nameof(SetBrowserControlsEnabled),
+            static (instance, value) => RustinoWebViewDllImports.rustino_set_browser_accelerator_keys_enabled(instance, value ? 1 : 0));
         return this;
     }
 
@@ -81,9 +79,8 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetScrollBarStyle(ScrollBarStyle style)
     {
-        _scrollBarStyle = style;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoWebViewDllImports.rustino_set_scroll_bar_style(_nativeHandle, (int)style);
+        SetCreationOnly(ref _scrollBarStyle, style, nameof(SetScrollBarStyle),
+            static (instance, value) => RustinoWebViewDllImports.rustino_set_scroll_bar_style(instance, (int)value));
         return this;
     }
 
@@ -93,9 +90,8 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetAcceptFirstMouse(bool accept)
     {
-        _acceptFirstMouse = accept;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoWebViewDllImports.rustino_set_accept_first_mouse(_nativeHandle, accept ? 1 : 0);
+        SetCreationOnly(ref _acceptFirstMouse, accept, nameof(SetAcceptFirstMouse),
+            static (instance, value) => RustinoWebViewDllImports.rustino_set_accept_first_mouse(instance, value ? 1 : 0));
         return this;
     }
 
@@ -105,9 +101,8 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetBackForwardGesturesEnabled(bool enabled)
     {
-        _backForwardGestures = enabled;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoWebViewDllImports.rustino_set_back_forward_gestures_enabled(_nativeHandle, enabled ? 1 : 0);
+        SetCreationOnly(ref _backForwardGestures, enabled, nameof(SetBackForwardGesturesEnabled),
+            static (instance, value) => RustinoWebViewDllImports.rustino_set_back_forward_gestures_enabled(instance, value ? 1 : 0));
         return this;
     }
 
@@ -118,9 +113,8 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow SetFileDropEnabled(bool enabled)
     {
-        _fileDropEnabled = enabled;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoWebViewDllImports.rustino_set_file_drop_enabled(_nativeHandle, enabled ? 1 : 0);
+        SetCreationOnly(ref _fileDropEnabled, enabled, nameof(SetFileDropEnabled),
+            static (instance, value) => RustinoWebViewDllImports.rustino_set_file_drop_enabled(instance, value ? 1 : 0));
         return this;
     }
 
@@ -130,6 +124,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow Print()
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoWebViewDllImports.rustino_print(_nativeHandle);
         return this;
@@ -138,6 +133,7 @@ public partial class RustinoWindow
     /// <summary>Reloads the page. A page loaded from an HTML string is loaded again from the string.</summary>
     public RustinoWindow Reload()
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoWebViewDllImports.rustino_reload(_nativeHandle);
         return this;
@@ -150,6 +146,7 @@ public partial class RustinoWindow
     /// </summary>
     public RustinoWindow OpenDevTools()
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoWebViewDllImports.rustino_open_devtools(_nativeHandle);
         return this;
@@ -158,6 +155,7 @@ public partial class RustinoWindow
     /// <summary>Closes the web inspector (not supported on Windows; on macOS it needs the <c>devtools</c> feature).</summary>
     public RustinoWindow CloseDevTools()
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoWebViewDllImports.rustino_close_devtools(_nativeHandle);
         return this;
@@ -166,6 +164,7 @@ public partial class RustinoWindow
     /// <summary>Deletes the cookies, the cache and the storage of every site.</summary>
     public RustinoWindow ClearBrowsingData()
     {
+        ThrowIfDisposed();
         if (_nativeHandle != IntPtr.Zero)
             RustinoWebViewDllImports.rustino_clear_browsing_data(_nativeHandle);
         return this;
@@ -181,6 +180,7 @@ public partial class RustinoWindow
     /// </exception>
     public RustinoCookie[] GetCookies(string? url = null)
     {
+        ThrowIfDisposed();
         if (_nativeHandle == IntPtr.Zero) return [];
         var json = ConsumeStringResult(RustinoWebViewDllImports.rustino_get_cookies(_nativeHandle, url, out var status));
         if (status == 2)
@@ -196,6 +196,7 @@ public partial class RustinoWindow
     /// </summary>
     public bool SetCookie(RustinoCookie cookie)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(cookie);
         if (_nativeHandle == IntPtr.Zero) return false;
         var json = JsonSerializer.Serialize(cookie, CookieJsonContext.Default.RustinoCookie);
@@ -208,6 +209,7 @@ public partial class RustinoWindow
     /// </summary>
     public bool DeleteCookie(RustinoCookie cookie)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(cookie);
         if (_nativeHandle == IntPtr.Zero) return false;
         var json = JsonSerializer.Serialize(cookie, CookieJsonContext.Default.RustinoCookie);
@@ -249,26 +251,23 @@ public partial class RustinoWindow
         w._downloadCompletedObs.Complete();
     }
 
-    private static void OnFileDropNative(IntPtr ctx, int kind, IntPtr pathsPtr, int x, int y)
+    private static void OnFileDropNative(IntPtr ctx, int kind, IntPtr pathsPtr, int x, int y) => GuardNativeCallback(ctx, nameof(OnFileDropNative), w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return;
         var paths = Marshal.PtrToStringUTF8(pathsPtr)?.Split('\n', StringSplitOptions.RemoveEmptyEntries) ?? [];
         var args = new FileDropEventArgs((FileDropEventType)kind, paths, x, y);
         w.FileDrop?.Invoke(w, args);
         w._fileDropObs.Emit(args);
-    }
+    });
 
-    private static void OnDocumentTitleChangedNative(IntPtr ctx, IntPtr titlePtr)
+    private static void OnDocumentTitleChangedNative(IntPtr ctx, IntPtr titlePtr) => GuardNativeCallback(ctx, nameof(OnDocumentTitleChangedNative), w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return;
         var title = Marshal.PtrToStringUTF8(titlePtr) ?? "";
         w.DocumentTitleChanged?.Invoke(w, title);
         w._documentTitleChangedObs.Emit(title);
-    }
+    });
 
-    private static int OnDownloadStartingNative(IntPtr ctx, IntPtr urlPtr, IntPtr suggestedPathPtr, IntPtr response)
+    private static int OnDownloadStartingNative(IntPtr ctx, IntPtr urlPtr, IntPtr suggestedPathPtr, IntPtr response) => GuardNativeCallback(ctx, nameof(OnDownloadStartingNative), 0, w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return 1;
         var args = new DownloadStartingEventArgs(
             Marshal.PtrToStringUTF8(urlPtr) ?? "", Marshal.PtrToStringUTF8(suggestedPathPtr) ?? "");
         w.DownloadStarting?.Invoke(w, args);
@@ -282,14 +281,13 @@ public partial class RustinoWindow
             RustinoWebViewDllImports.rustino_set_download_destination(response, destination);
         }
         return 1;
-    }
+    });
 
-    private static void OnDownloadCompletedNative(IntPtr ctx, IntPtr urlPtr, IntPtr pathPtr, int success)
+    private static void OnDownloadCompletedNative(IntPtr ctx, IntPtr urlPtr, IntPtr pathPtr, int success) => GuardNativeCallback(ctx, nameof(OnDownloadCompletedNative), w =>
     {
-        if (!Instances.TryGetValue(ctx, out var w)) return;
         var args = new DownloadCompletedEventArgs(
             Marshal.PtrToStringUTF8(urlPtr) ?? "", success != 0 ? Marshal.PtrToStringUTF8(pathPtr) : null);
         w.DownloadCompleted?.Invoke(w, args);
         w._downloadCompletedObs.Emit(args);
-    }
+    });
 }

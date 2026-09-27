@@ -61,11 +61,23 @@ pub unsafe extern "C" fn rustino_dtor(instance: *mut RustinoWindow) {
 
 /// Runs the window until it closes. Returns 0 when it closed, 1 when it failed: the window or the
 /// webview couldn't be created, it already ran, or the native code panicked.
-/// `rustino_get_last_error` tells why. When the host destroyed the window meanwhile, it's freed
-/// before returning.
+/// `error_out` receives an owned UTF-8 error string on failure; free it with
+/// `rustino_free_string`. When the host destroyed the window meanwhile, it's freed before
+/// returning.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rustino_wait_for_exit(instance: *mut RustinoWindow) -> i32 {
+pub unsafe extern "C" fn rustino_wait_for_exit(
+    instance: *mut RustinoWindow,
+    error_out: *mut *mut c_char,
+) -> i32 {
+    if let Some(error_out) = unsafe { error_out.as_mut() } {
+        *error_out = std::ptr::null_mut();
+    }
     let Some(inst) = (unsafe { instance.as_ref() }) else {
+        if let Some(error_out) = unsafe { error_out.as_mut() } {
+            *error_out = std::ffi::CString::new("The native window instance is null.")
+                .expect("static string has no NUL")
+                .into_raw();
+        }
         return 1;
     };
     let mut ran = false;
@@ -78,7 +90,11 @@ pub unsafe extern "C" fn rustino_wait_for_exit(instance: *mut RustinoWindow) -> 
     let status = match result {
         Ok(()) => 0,
         Err(message) => {
-            inst.set_last_error(message);
+            if let Some(error_out) = unsafe { error_out.as_mut() } {
+                *error_out = std::ffi::CString::new(message.replace('\0', " "))
+                    .unwrap_or_default()
+                    .into_raw();
+            }
             1
         }
     };
@@ -95,18 +111,6 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "unknown error".into());
     format!("The native window failed: {detail}")
-}
-
-/// Why `rustino_wait_for_exit` failed, or null. Free it with `rustino_free_string`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rustino_get_last_error(instance: *mut RustinoWindow) -> *mut c_char {
-    catch_unwind(|| {
-        let message = unsafe { instance.as_ref() }?.last_error()?;
-        std::ffi::CString::new(message.replace('\0', " ")).ok().map(|s| s.into_raw())
-    })
-    .ok()
-    .flatten()
-    .unwrap_or(std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
@@ -1643,11 +1647,10 @@ mod tests {
     fn a_window_runs_once() {
         let instance = Box::into_raw(Box::new(RustinoWindow::new(WindowConfig::default())));
         unsafe {
-            assert!(rustino_get_last_error(instance).is_null());
             assert!(instance.as_ref().unwrap().start().is_ok());
             // The window is starting: a second run fails without touching it
-            assert_eq!(rustino_wait_for_exit(instance), 1);
-            let error = rustino_get_last_error(instance);
+            let mut error = std::ptr::null_mut();
+            assert_eq!(rustino_wait_for_exit(instance, &mut error), 1);
             assert_eq!(std::ffi::CStr::from_ptr(error).to_str().unwrap(), "The window is already running.");
             rustino_free_string(error);
             // Destroyed while it runs: freed by the first run, once done

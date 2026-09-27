@@ -23,8 +23,6 @@ use crate::state::SharedState;
 pub struct RustinoWindow {
     setup: Mutex<Setup>,
     pub state: Arc<SharedState>,
-    /// Why the window failed to run
-    last_error: Mutex<Option<String>>,
     /// The host's handle and, while `run` runs, the event loop: the last one to let go frees the
     /// instance, so that the host can destroy it from one of its handlers
     holders: AtomicUsize,
@@ -73,7 +71,6 @@ impl RustinoWindow {
                 pending: Vec::new(),
             }),
             state,
-            last_error: Mutex::new(None),
             holders: AtomicUsize::new(1),
         }
     }
@@ -93,14 +90,6 @@ impl RustinoWindow {
     /// Lets go of the instance: returns true when the caller must free it.
     pub fn release(&self) -> bool {
         self.holders.fetch_sub(1, Ordering::AcqRel) == 1
-    }
-
-    pub fn set_last_error(&self, message: String) {
-        *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
-    }
-
-    pub fn last_error(&self) -> Option<String> {
-        self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn setup(&self) -> MutexGuard<'_, Setup> {
@@ -489,6 +478,15 @@ impl RustinoWindow {
                 Event::WindowEvent {
                     event: ref win_event, ..
                 } => {
+                    // These flags can change from the native window manager without a
+                    // Rustino command (for example, the user minimizes the window).
+                    state
+                        .is_minimized
+                        .store(window.is_minimized(), Ordering::Release);
+                    state
+                        .is_fullscreen
+                        .store(window.fullscreen().is_some(), Ordering::Release);
+
                     match win_event {
                         WindowEvent::CloseRequested => {
                             if let Some(cb) = callbacks.on_closing {
