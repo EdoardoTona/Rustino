@@ -161,6 +161,24 @@ to `false` in a handler when that launch should not activate the configured wind
 On macOS, Finder and LaunchServices may reactivate a bundled app without starting another process; this API also
 covers direct executable launches.
 
+### Deep Links
+
+After registering a custom scheme with the operating system or declaring it in the macOS app bundle, use
+`AttachDeepLinks()` to route URLs from the initial command line and later single-instance launches through
+`UrlsOpened` on the window thread:
+
+```csharp
+window.UrlsOpened += (_, urls) =>
+{
+    foreach (var url in urls) HandleAfterValidation(url);
+};
+window.AttachDeepLinks(single, "notes");
+```
+
+`RustinoDeepLinks.GetCurrent("notes")` returns matching absolute URLs from the current process arguments.
+The helper filters only by the supplied scheme allow-list; it does not register the scheme or validate URL
+hosts, paths, OAuth state, or tokens. Treat every URL as untrusted input.
+
 ### Custom Schemes
 
 Serve content for a custom URL scheme directly from .NET (same signature as Photino). Register handlers before `WaitForClose()`; returning `null` produces a 404:

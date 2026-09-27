@@ -350,6 +350,8 @@ public partial class RustinoWindow
     {
         var urls = Marshal.PtrToStringUTF8(urlsPtr)?.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (urls is not { Length: > 0 }) return;
+        urls = w.FilterUrlsOpened(urls);
+        if (urls.Length == 0) return;
         w.UrlsOpened?.Invoke(w, urls);
         w._urlsOpenedObs.Emit(urls);
     });

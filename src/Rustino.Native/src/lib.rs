@@ -9,6 +9,7 @@ mod activate;
 mod callbacks;
 mod commands;
 mod config;
+mod deep_links;
 mod dialogs;
 mod icon;
 mod invoke;
