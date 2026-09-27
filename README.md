@@ -118,6 +118,7 @@ window and webview exist.
 | `Focus()` | Bring focus to the window |
 | `Activate(string? activationToken = null)` | Show and restore the window, then request focus. On Linux, pass the launcher activation token when available. |
 | `Close()` | Close the window |
+| `RustinoWindow.OpenExternal(string)` | Open an `http`, `https` or `mailto` URL in the system's default application |
 | `ExecuteScript(string)` | Evaluate JavaScript in the webview |
 | `SendWebMessage(string)` | Post a message to the webview |
 | `SetZoom(double)` | Set webview zoom factor |

@@ -11,6 +11,7 @@ mod commands;
 mod config;
 mod deep_links;
 mod dialogs;
+mod external;
 mod icon;
 mod invoke;
 mod menu;
