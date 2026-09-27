@@ -689,6 +689,24 @@ cd ../Rustino.Samples.Blazor
 dotnet run
 ```
 
+### Interop contract tests
+
+The .NET tests compare every Rust C export with the P/Invoke imports, including callback signatures and platform
+gating. They also compare the `#[repr(C)]` layouts with the Rust-generated snapshot and check that each import
+exists in the built native library for the current platform:
+
+```bash
+dotnet test src/Rustino.NET.Tests/Rustino.NET.Tests.csproj -c Release
+```
+
+Build `src/Rustino.Native` with `cargo build --release` first to enable the binary export check. The Rust ABI
+snapshot is checked by `cargo test --release`; after an intentional ABI layout change, update it with:
+
+```bash
+cd src/Rustino.Native
+UPDATE_ABI_SNAPSHOT=1 cargo test --release abi_layout
+```
+
 ## Cross-Platform Support
 
 | Platform | WebView Engine | Native Library |

@@ -3,6 +3,8 @@
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::unnecessary_map_or)]
 
+#[cfg(test)]
+mod abi_layout;
 #[cfg(target_os = "windows")]
 mod accelerators;
 mod callbacks;
