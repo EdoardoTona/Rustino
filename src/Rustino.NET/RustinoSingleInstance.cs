@@ -18,13 +18,12 @@ public sealed class RustinoSingleInstance : IDisposable
     private readonly FileStream? _lockFile;
     private readonly Channel<SecondInstanceEventArgs> _messages = Channel.CreateBounded<SecondInstanceEventArgs>(
         new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
-    private readonly CancellationTokenSource _lifetime = new();
-    private readonly CancellationToken _lifetimeToken;
     private EventHandler<SecondInstanceEventArgs>? _secondInstanceStarted;
     private EventHandler<SingleInstanceExceptionEventArgs>? _unhandledException;
     private RustinoWindow? _mainWindow;
     private SingleInstanceServer? _server;
     private Task? _dispatcher;
+    private int _dispatchThreadId;
     private int _disposed;
 
     private RustinoSingleInstance(
@@ -41,7 +40,6 @@ public sealed class RustinoSingleInstance : IDisposable
         _options = options;
         _arguments = arguments;
         _lockFile = lockFile;
-        _lifetimeToken = _lifetime.Token;
     }
 
     /// <summary>Claims the app id or forwards this launch to the process that already owns it.</summary>
@@ -66,7 +64,7 @@ public sealed class RustinoSingleInstance : IDisposable
             {
                 lockFile = new FileStream(endpoint.LockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
-            catch (IOException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 lockFile = null;
             }
@@ -179,13 +177,12 @@ public sealed class RustinoSingleInstance : IDisposable
             == ForwardResult.Delivered;
     }
 
-    /// <summary>Stops receiving launches and releases the app id.</summary>
+    /// <summary>Stops receiving launches, waits for the active dispatcher, then releases the app id.</summary>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        _lifetime.Cancel();
         try
         {
             if (_server is not null)
@@ -193,9 +190,20 @@ public sealed class RustinoSingleInstance : IDisposable
         }
         finally
         {
+            // Stop the listener before completing the queue. Let an active dispatcher
+            // handle requests already acknowledged by the server before releasing the lock.
             _messages.Writer.TryComplete();
-            _lockFile?.Dispose();
-            _lifetime.Dispose();
+            try
+            {
+                // An event handler may dispose its own instance. It cannot wait for the
+                // dispatcher task whose current callback is this Dispose call.
+                if (Volatile.Read(ref _dispatchThreadId) != Environment.CurrentManagedThreadId)
+                    _dispatcher?.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                _lockFile?.Dispose();
+            }
         }
     }
 
@@ -226,9 +234,10 @@ public sealed class RustinoSingleInstance : IDisposable
 
     private async Task DispatchMessagesAsync()
     {
-        try
+        await foreach (var message in _messages.Reader.ReadAllAsync().ConfigureAwait(false))
         {
-            await foreach (var message in _messages.Reader.ReadAllAsync(_lifetimeToken).ConfigureAwait(false))
+            Volatile.Write(ref _dispatchThreadId, Environment.CurrentManagedThreadId);
+            try
             {
                 EventHandler<SecondInstanceEventArgs>? handlers;
                 lock (_gate) handlers = _secondInstanceStarted;
@@ -241,7 +250,7 @@ public sealed class RustinoSingleInstance : IDisposable
                     }
                 }
 
-                if (message.ActivateMainWindow && Volatile.Read(ref _disposed) == 0)
+                if (message.ActivateMainWindow)
                 {
                     RustinoWindow? window;
                     lock (_gate) window = _mainWindow;
@@ -249,8 +258,11 @@ public sealed class RustinoSingleInstance : IDisposable
                     catch (Exception exception) { ReportHandlerException(exception, nameof(MainWindow)); }
                 }
             }
+            finally
+            {
+                Volatile.Write(ref _dispatchThreadId, 0);
+            }
         }
-        catch (OperationCanceledException) { }
     }
 
     private void ReportHandlerException(Exception exception, string handlerName)

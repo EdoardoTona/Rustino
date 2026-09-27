@@ -35,6 +35,9 @@ internal sealed record SingleInstanceEndpoint(string DisplayId, string LockPath,
         var candidates = new List<string>();
         if (OperatingSystem.IsLinux() && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR")))
             candidates.Add(Path.Combine(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR")!, "rustino"));
+        var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(localData))
+            candidates.Add(Path.Combine(localData, "Rustino", "SingleInstance"));
         if (OperatingSystem.IsMacOS())
             candidates.Add(Path.Combine(Path.GetTempPath(), "rustino"));
         var userHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Environment.UserName))).ToLowerInvariant()[..12];
@@ -52,6 +55,12 @@ internal sealed record SingleInstanceEndpoint(string DisplayId, string LockPath,
                     File.SetUnixFileMode(directory, PrivateDirectoryMode);
                 if (File.GetUnixFileMode(directory) != PrivateDirectoryMode)
                     continue;
+
+                // A shared temp directory can contain a pre-created 0700 directory owned by
+                // someone else. Its mode looks private, but this user cannot create the lock.
+                var probe = Path.Combine(directory, $".rustino-probe-{Guid.NewGuid():N}");
+                using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                           1, FileOptions.DeleteOnClose)) { }
 
                 var socketPath = Path.Combine(directory, $"{key[..20]}.sock");
                 if (Encoding.UTF8.GetByteCount(socketPath) > 100)
