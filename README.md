@@ -131,6 +131,36 @@ window and webview exist.
 | `WaitForClose()` | Block until the window is closed; throws `RustinoException` if native window or webview creation fails |
 | `Dispose()` | Release native resources (`RustinoWindow` implements `IDisposable`) |
 
+### Single Instance
+
+Acquire the app id at the start of `Main`. The first process becomes primary; later processes forward their
+arguments and return with `Status == Forwarded` after the primary queues the launch:
+
+```csharp
+using var single = RustinoSingleInstance.Acquire("com.company.product", new SingleInstanceOptions
+{
+    Arguments = args,
+});
+if (single.Status == SingleInstanceStatus.Forwarded) return;
+if (single.Status == SingleInstanceStatus.ForwardFailed)
+{
+    Console.Error.WriteLine("The running instance did not respond.");
+    return;
+}
+
+var window = new RustinoWindow().Load("wwwroot/index.html");
+single.SecondInstanceStarted += (_, e) => OpenFiles(e.Args, e.WorkingDirectory);
+single.MainWindow = window; // restores and activates after each forwarded launch
+window.WaitForClose();
+```
+
+`SecondInstanceStarted` runs sequentially on a background thread, so UI frameworks must dispatch UI work to their
+own thread. Messages received before a handler is attached are held in a bounded queue. Set `ActivateMainWindow`
+to `false` in a handler when that launch should not activate the configured window. Linux launchers may provide
+`XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID`; Rustino forwards it to `Activate()` when it activates the window.
+On macOS, Finder and LaunchServices may reactivate a bundled app without starting another process; this API also
+covers direct executable launches.
+
 ### Custom Schemes
 
 Serve content for a custom URL scheme directly from .NET (same signature as Photino). Register handlers before `WaitForClose()`; returning `null` produces a 404:
