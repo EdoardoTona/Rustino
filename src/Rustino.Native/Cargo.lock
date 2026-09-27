@@ -2406,6 +2406,7 @@ dependencies = [
  "serde_json",
  "tao",
  "tray-icon",
+ "url",
  "webview2-com",
  "windows",
  "wry",

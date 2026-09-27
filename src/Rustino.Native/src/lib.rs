@@ -7,10 +7,13 @@
 mod abi_layout;
 #[cfg(target_os = "windows")]
 mod accelerators;
+mod activate;
 mod callbacks;
 mod commands;
 mod config;
+mod deep_links;
 mod dialogs;
+mod external;
 mod icon;
 mod invoke;
 mod menu;

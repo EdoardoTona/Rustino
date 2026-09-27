@@ -157,7 +157,7 @@ pub struct WindowExtCallbacks {
     pub on_theme_changed: Option<unsafe extern "C" fn(*mut c_void, i32)>,
     /// (context, scale factor, new width, new height)
     pub on_scale_factor_changed: Option<unsafe extern "C" fn(*mut c_void, f64, i32, i32)>,
-    /// (context, URLs separated by '\n'): macOS only
+    /// (context, URLs separated by '\n')
     pub on_urls_opened: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     /// (context, has visible windows): macOS only
     pub on_reopen: Option<unsafe extern "C" fn(*mut c_void, i32)>,
@@ -180,6 +180,8 @@ pub enum WindowCommand {
     SetMacTitleBarStyle(MacTitleBarStyle),
     SetTrafficLightPosition(f64, f64),
     SetDesktopFileName(Option<String>),
+    /// Deliver URL arguments through the registered `UrlsOpened` callback.
+    DeliverUrls(Vec<String>),
     DragWindow,
     DragResizeWindow(ResizeDirection),
     /// Double click on a drag region
@@ -490,6 +492,13 @@ impl WindowExtRuntime {
             WindowCommand::SetDesktopFileName(name) => {
                 #[cfg(target_os = "linux")]
                 launcher::set_desktop_file_name(name);
+            }
+            WindowCommand::DeliverUrls(urls) => {
+                if let Some(callback) = self.callbacks.on_urls_opened {
+                    if let Ok(payload) = CString::new(urls.join("\n")) {
+                        unsafe { callback(self.context, payload.as_ptr()) };
+                    }
+                }
             }
             WindowCommand::DragWindow => {
                 let _ = window.drag_window();

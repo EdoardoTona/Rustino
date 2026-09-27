@@ -6,7 +6,7 @@ namespace Rustino.NET;
 internal delegate void ScaleFactorCallback(IntPtr context, double scaleFactor, int width, int height);
 
 // Native window features (window_ext.rs)
-internal static class RustinoExtDllImports
+internal static partial class RustinoExtDllImports
 {
     private const string Lib = NativeLibraryResolver.LibName;
 

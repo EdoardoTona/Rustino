@@ -116,7 +116,9 @@ window and webview exist.
 | `SetFullscreen(bool)` | Enter/exit fullscreen |
 | `SetVisible(bool)` | Show/hide the window |
 | `Focus()` | Bring focus to the window |
+| `Activate(string? activationToken = null)` | Show and restore the window, then request focus. On Linux, pass the launcher activation token when available. |
 | `Close()` | Close the window |
+| `RustinoWindow.OpenExternal(string)` | Open an `http`, `https` or `mailto` URL in the system's default application |
 | `ExecuteScript(string)` | Evaluate JavaScript in the webview |
 | `SendWebMessage(string)` | Post a message to the webview |
 | `SetZoom(double)` | Set webview zoom factor |
@@ -129,6 +131,54 @@ window and webview exist.
 | `ClearBadge()` | Remove the taskbar/dock badge |
 | `WaitForClose()` | Block until the window is closed; throws `RustinoException` if native window or webview creation fails |
 | `Dispose()` | Release native resources (`RustinoWindow` implements `IDisposable`) |
+
+### Single Instance
+
+Acquire the app id at the start of `Main`. The first process becomes primary; later processes forward their
+arguments and return with `Status == Forwarded` after the primary queues the launch:
+
+```csharp
+using var single = RustinoSingleInstance.Acquire("com.company.product", new SingleInstanceOptions
+{
+    Arguments = args,
+});
+if (single.Status == SingleInstanceStatus.Forwarded) return;
+if (single.Status == SingleInstanceStatus.ForwardFailed)
+{
+    Console.Error.WriteLine("The running instance did not respond.");
+    return;
+}
+
+var window = new RustinoWindow().Load("wwwroot/index.html");
+single.SecondInstanceStarted += (_, e) => OpenFiles(e.Args, e.WorkingDirectory);
+single.MainWindow = window; // restores and activates after each forwarded launch
+window.WaitForClose();
+```
+
+`SecondInstanceStarted` runs sequentially on a background thread, so UI frameworks must dispatch UI work to their
+own thread. Messages received before a handler is attached are held in a bounded queue. Set `ActivateMainWindow`
+to `false` in a handler when that launch should not activate the configured window. Linux launchers may provide
+`XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID`; Rustino forwards it to `Activate()` when it activates the window.
+On macOS, Finder and LaunchServices may reactivate a bundled app without starting another process; this API also
+covers direct executable launches.
+
+### Deep Links
+
+After registering a custom scheme with the operating system or declaring it in the macOS app bundle, use
+`AttachDeepLinks()` to route URLs from the initial command line and later single-instance launches through
+`UrlsOpened` on the window thread:
+
+```csharp
+window.UrlsOpened += (_, urls) =>
+{
+    foreach (var url in urls) HandleAfterValidation(url);
+};
+window.AttachDeepLinks(single, "notes");
+```
+
+`RustinoDeepLinks.GetCurrent("notes")` returns matching absolute URLs from the current process arguments.
+The helper filters only by the supplied scheme allow-list; it does not register the scheme or validate URL
+hosts, paths, OAuth state, or tokens. Treat every URL as untrusted input.
 
 ### Custom Schemes
 
