@@ -116,6 +116,7 @@ window and webview exist.
 | `SetFullscreen(bool)` | Enter/exit fullscreen |
 | `SetVisible(bool)` | Show/hide the window |
 | `Focus()` | Bring focus to the window |
+| `Activate(string? activationToken = null)` | Show and restore the window, then request focus. On Linux, pass the launcher activation token when available. |
 | `Close()` | Close the window |
 | `ExecuteScript(string)` | Evaluate JavaScript in the webview |
 | `SendWebMessage(string)` | Post a message to the webview |

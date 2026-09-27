@@ -41,7 +41,7 @@ internal delegate void MenuItemCallback(IntPtr context, IntPtr id, int isChecked
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 internal delegate void TrayIconCallback(IntPtr context, int button, int x, int y);
 
-internal static class RustinoDllImports
+internal static partial class RustinoDllImports
 {
     private const string Lib = NativeLibraryResolver.LibName;
 

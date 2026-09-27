@@ -5,6 +5,7 @@
 
 #[cfg(target_os = "windows")]
 mod accelerators;
+mod activate;
 mod callbacks;
 mod commands;
 mod config;
