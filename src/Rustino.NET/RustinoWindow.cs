@@ -917,6 +917,13 @@ public partial class RustinoWindow : IDisposable
             {
                 Interlocked.Exchange(ref _waitForCloseActive, 0);
                 UnregisterCallbacks();
+                // Dispose may have requested a close before the native call acquired its
+                // own reference. Keep the handle alive until that call has returned.
+                if (Volatile.Read(ref _disposed) != 0 && _nativeHandle != IntPtr.Zero)
+                {
+                    RustinoDllImports.rustino_dtor(_nativeHandle);
+                    _nativeHandle = IntPtr.Zero;
+                }
                 if (Interlocked.Exchange(ref _logCallbackReleasePending, 0) != 0)
                     ReleaseLogCallbackHandle();
             }
@@ -1317,8 +1324,17 @@ public partial class RustinoWindow : IDisposable
                 if (_nativeHandle != IntPtr.Zero)
                 {
                     Instances.TryRemove(_nativeHandle, out _);
-                    RustinoDllImports.rustino_dtor(_nativeHandle);
-                    _nativeHandle = IntPtr.Zero;
+                    if (Volatile.Read(ref _waitForCloseActive) != 0)
+                    {
+                        // The native call may not have started yet, so freeing here could
+                        // leave WaitForClose with a dangling pointer.
+                        RustinoDllImports.rustino_close(_nativeHandle);
+                    }
+                    else
+                    {
+                        RustinoDllImports.rustino_dtor(_nativeHandle);
+                        _nativeHandle = IntPtr.Zero;
+                    }
                 }
 
                 if (Volatile.Read(ref _waitForCloseActive) != 0)
