@@ -14,6 +14,19 @@ var trayIconPath = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsMacO
 var menuInitialized = false;
 var (saveEnabled, saveRenamed, sidebarChecked, trayTitleCount) = (true, false, true, 0);
 
+// --- Single instance: a second launch forwards its arguments here and exits ---
+using var single = RustinoSingleInstance.Acquire("Rustino.Samples", new SingleInstanceOptions { Arguments = args, Logger = logger });
+if (single.Status == SingleInstanceStatus.Forwarded)
+{
+    Console.WriteLine("Forwarded the arguments to the running instance.");
+    return;
+}
+if (single.Status == SingleInstanceStatus.ForwardFailed)
+{
+    Console.Error.WriteLine("The running instance did not respond.");
+    return;
+}
+
 // --- Notifications: Windows drops toasts for an appId that is not registered ---
 RustinoWindow.RegisterNotificationAppId("Rustino", "Rustino", iconPath);
 
@@ -135,7 +148,21 @@ window.ThemeChanged += (_, theme) =>
 };
 window.ScaleFactorChanged += (_, a) =>
     Console.WriteLine($"[Event] ScaleFactorChanged: {a.ScaleFactor} ({a.Width}x{a.Height})");
-window.UrlsOpened += (_, urls) => Log($"Opened: {string.Join(", ", urls)}");
+// Deep links (see AttachDeepLinks below) and, on macOS, files and URLs opened through the app bundle
+window.UrlsOpened += (_, urls) =>
+{
+    Console.WriteLine($"[Event] UrlsOpened: {string.Join(", ", urls)}");
+    Log($"Opened: {string.Join(", ", urls)}");
+};
+window.Navigating += (_, e) => Console.WriteLine($"[Event] Navigating: {(e.Url.Length > 80 ? e.Url[..80] + "…" : e.Url)}");
+window.UnhandledCallbackException += (_, e) => Console.Error.WriteLine($"[Error] {e.CallbackName}: {e.Exception.Message}");
+
+// --- Later launches of the sample (dotnet run -- some args) ---
+single.SecondInstanceStarted += (_, e) =>
+{
+    Console.WriteLine($"[SingleInstance] PID {e.ProcessId} in {e.WorkingDirectory}: {string.Join(" ", e.Args)}");
+    Log($"Second instance (PID {e.ProcessId}) args: {(e.Args.Length == 0 ? "(none)" : string.Join(" ", e.Args))}");
+};
 // macOS: a click on the Dock icon brings back the window hidden in the tray
 window.Reopened += (_, hasVisibleWindows) =>
 {
@@ -239,6 +266,17 @@ void HandleMessage(string msg)
             break;
         case "get-time":
             Log($"Server time: {DateTime.Now:HH:mm:ss}");
+            break;
+
+        // Launch: activation and external URLs
+        case "activate-later":
+            window.SetVisible(false);
+            Log("Hidden: Activate() in 3 s");
+            Task.Delay(3000).ContinueWith(_ => window.Activate());
+            break;
+        case var ext when ext.StartsWith("open-external:"):
+            var url = ext["open-external:".Length..];
+            Log($"OpenExternal({url}): {RustinoWindow.OpenExternal(url)}");
             break;
 
         // Native window features
@@ -483,7 +521,7 @@ window
     .SetAboutVersion("1.0")
     .SetAboutCopyright("MIT License")
     .SetAboutComments("Native desktop windows with embedded web views, powered by Rust.")
-    .SetAboutWebsite("https://github.com/Ivy-Interactive/Rustino")
+    .SetAboutWebsite("https://github.com/EdoardoTona/Rustino")
     .SetUseOsDefaultSize(false)
     .SetSize(1100, 800)
     .SetMinSize(600, 400)
@@ -510,6 +548,12 @@ window
         });
     """)
     .Load("data:text/html," + Uri.EscapeDataString(Html()));
+
+// rustino-sample:// URLs from this launch and from later ones raise UrlsOpened.
+// Try: dotnet run -- rustino-sample://open?id=42
+window.AttachDeepLinks(single, "rustino-sample");
+// Each forwarded launch restores and activates the window
+single.MainWindow = window;
 
 window.WaitForClose();
 
@@ -592,6 +636,7 @@ static string Html() => """
       <div class="tab" data-tab="voice">Voice Test</div>
       <div class="tab" data-tab="native">Native</div>
       <div class="tab" data-tab="webview">WebView</div>
+      <div class="tab" data-tab="launch">Launch</div>
     </div>
 
     <div class="panels">
@@ -925,6 +970,34 @@ static string Html() => """
             <button class="r" onclick="send('webview:cookie-delete')">Delete Cookie</button>
             <button class="r" onclick="send('webview:clear-data')">Clear Browsing Data</button>
           </div>
+        </div>
+      </div>
+
+      <!-- LAUNCH -->
+      <div class="panel" id="tab-launch">
+        <h2>Launch & Activation</h2>
+        <div class="card">
+          <h3>Single Instance</h3>
+          <p style="color:#888;font-size:0.82rem">RustinoSingleInstance.Acquire() runs at startup. Run the sample again (<code>dotnet run -- hello world</code>): the new process forwards its arguments here, SecondInstanceStarted logs them and the window is activated.</p>
+        </div>
+        <div class="card">
+          <h3>Deep Links</h3>
+          <p style="color:#888;font-size:0.82rem">AttachDeepLinks(single, "rustino-sample") routes matching URLs through UrlsOpened, from the first launch and from later ones: <code>dotnet run -- rustino-sample://open?id=42</code>. Registering the scheme with the OS is up to the app's installer.</p>
+        </div>
+        <div class="card">
+          <h3>Activate</h3>
+          <div class="row">
+            <button class="b" onclick="send('activate-later')">Hide, then Activate() in 3 s</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>OpenExternal</h3>
+          <div class="row">
+            <button class="g" onclick="send('open-external:https://github.com/EdoardoTona/Rustino')">https:// URL</button>
+            <button class="g" onclick="send('open-external:mailto:someone@example.com?subject=Rustino')">mailto: URL</button>
+            <button class="r" onclick="send('open-external:file:///etc/hosts')">file:// URL (refused)</button>
+          </div>
+          <p style="color:#888;font-size:0.78rem;margin-top:8px">Only http, https and mailto URLs are opened in the system's default application.</p>
         </div>
       </div>
     </div>

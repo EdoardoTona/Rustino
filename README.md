@@ -4,7 +4,7 @@ Cross-platform native desktop windows with embedded web views, powered by **Rust
 
 Inspired by [Photino.NET](https://tryphotino.io).
 
-Rustino replaces Photino's C++ native layer with Rust, using [wry](https://github.com/nicbarker/gaia) for the webview and [tao](https://github.com/nicbarker/gaia) for window management — the same libraries that power [Tauri](https://tauri.app).
+Rustino replaces Photino's C++ native layer with Rust, using [wry](https://github.com/tauri-apps/wry) for the webview and [tao](https://github.com/tauri-apps/tao) for window management — the same libraries that power [Tauri](https://tauri.app).
 
 ## Architecture
 
@@ -17,6 +17,22 @@ Your .NET App
                     ├── wry           → WKWebView (macOS)
                     └── wry           → WebKitGTK (Linux)
 ```
+
+## Installation
+
+This fork of [Ivy-Interactive/Rustino](https://github.com/Ivy-Interactive/Rustino) is published on NuGet as:
+
+| Package | Contents |
+|---|---|
+| [`EdoardoTona.Rustino`](https://www.nuget.org/packages/EdoardoTona.Rustino) | `RustinoWindow` and the native libraries for Windows, macOS and Linux (x64, ARM64) |
+| [`EdoardoTona.Rustino.Reactive`](https://www.nuget.org/packages/EdoardoTona.Rustino.Reactive) | System.Reactive operators for the window events |
+| [`EdoardoTona.Rustino.Blazor`](https://www.nuget.org/packages/EdoardoTona.Rustino.Blazor) | Blazor Hybrid host, replacing Photino.Blazor |
+
+```bash
+dotnet add package EdoardoTona.Rustino
+```
+
+The namespaces stay `Rustino.NET`, `Rustino.NET.Reactive` and `Rustino.Blazor`.
 
 ## Quick Start
 
@@ -37,7 +53,7 @@ window.WaitForClose();
 
 ## Migrating from Photino
 
-The API is identical. Change two things:
+The API is identical. Replace the `Photino.NET` package with `EdoardoTona.Rustino`, then change two things:
 
 ```diff
 - using Photino.NET;
@@ -98,6 +114,8 @@ For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid
 | `RegisterCustomSchemeHandler(string, handler)` | Serve `scheme://` requests from .NET (see [Custom Schemes](#custom-schemes)) |
 | `Load(Uri)` / `Load(string)` | Navigate to a URL or local file |
 | `LogVerbosity` | Set log verbosity (0 = silent) |
+| `SetLogger(ILogger)` | Route native and callback logs to a `Microsoft.Extensions.Logging` logger |
+| `SetApplicationId(string)` | Windows: the process AppUserModelID (taskbar grouping, pinning; pair it with [`RegisterNotificationAppId`](#windows-register-your-appid)) |
 
 `Load()` creates the native instance. Creation settings other than `LogVerbosity` can still be changed after
 `Load()` and before the first `WaitForClose()`; Rustino applies them to the native configuration. Set `LogVerbosity`
@@ -155,6 +173,18 @@ single.MainWindow = window; // restores and activates after each forwarded launc
 window.WaitForClose();
 ```
 
+| `SingleInstanceOptions` | Default | Description |
+|---|---|---|
+| `Arguments` | the arguments of `Main` | Sent to the primary by a later process |
+| `ForwardAutomatically` | `true` | `false` returns `Status == Secondary` without forwarding: call `ForwardToPrimary(args?, timeout?)` yourself |
+| `Timeout` | 5 s | How long to wait for a primary that is still starting (at most 5 minutes) |
+| `ActivateMainWindow` | `true` | Activate `MainWindow` after each forwarded launch |
+| `Logger` | `null` | Receives listener and handler failures |
+
+`SecondInstanceEventArgs` carries `Args`, `WorkingDirectory`, `ProcessId` and `ActivationToken` (Linux) of the
+later process. Exceptions thrown by the handlers are logged and raise `UnhandledException`. Disposing the instance
+stops listening, lets the handlers finish the launches already acknowledged, then releases the app id.
+
 `SecondInstanceStarted` runs sequentially on a background thread, so UI frameworks must dispatch UI work to their
 own thread. Messages received before a handler is attached are held in a bounded queue. Set `ActivateMainWindow`
 to `false` in a handler when that launch should not activate the configured window. Linux launchers may provide
@@ -179,6 +209,20 @@ window.AttachDeepLinks(single, "notes");
 `RustinoDeepLinks.GetCurrent("notes")` returns matching absolute URLs from the current process arguments.
 The helper filters only by the supplied scheme allow-list; it does not register the scheme or validate URL
 hosts, paths, OAuth state, or tokens. Treat every URL as untrusted input.
+
+### Splashscreen
+
+A borderless window showing an image while the app starts; it closes on `Close()` or `Dispose()`:
+
+```csharp
+using (var splash = new RustinoSplashscreen("splash.png", width: 400, height: 400))
+{
+    LoadSettings(); // slow startup work
+}
+
+// From an embedded resource
+using var splash = RustinoSplashscreen.FromImage(stream, 400, 300);
+```
 
 ### Custom Schemes
 
@@ -269,7 +313,7 @@ This writes `HKCU\Software\Classes\AppUserModelId\<appId>` (display name and ico
 
 ### Menus
 
-Native cross-platform application menus and context menus (powered by [muda](https://github.com/nicbarker/gaia)):
+Native cross-platform application menus and context menus (powered by [muda](https://github.com/tauri-apps/muda)):
 
 ```csharp
 // Application menu bar
@@ -356,7 +400,7 @@ On Windows, Ctrl+C/X/V/A/Z/Y go to the webview, which handles them natively, unl
 
 ### System Tray
 
-Native cross-platform system tray icon with optional context menu (powered by [tray-icon](https://github.com/nicbarker/gaia)):
+Native cross-platform system tray icon with optional context menu (powered by [tray-icon](https://github.com/tauri-apps/tray-icon)):
 
 ```csharp
 // Tray icon with tooltip and context menu
@@ -489,7 +533,7 @@ The platform limits below hold both before the window runs and while it runs.
 |---|---|---|
 | `ThemeChanged` | `WindowTheme` | The theme changed, by the system or by `SetTheme` |
 | `ScaleFactorChanged` | `ScaleFactorChangedEventArgs` | The window moved to a monitor with another scale (`.ScaleFactor`, `.Width`, `.Height`) |
-| `UrlsOpened` | `string[]` | macOS: the app was asked to open files or URLs (file associations and URL schemes of the app bundle) |
+| `UrlsOpened` | `string[]` | Deep links routed by [`AttachDeepLinks`](#deep-links) (all platforms); on macOS also files and URLs opened through the app bundle (file associations and URL schemes) |
 | `Reopened` | `bool` | macOS: Dock icon clicked; `false` when no window is visible, e.g. hidden in the tray |
 
 Each event also has an observable: `WhenThemeChanged`, `WhenScaleFactorChanged`, `WhenUrlsOpened`, `WhenReopened`.
@@ -558,7 +602,7 @@ Without `SetContextMenuEnabled(false)` right click opens the browser's menu. On 
 
 **Downloads.** `DownloadStarting` runs before the file is written: `SuggestedPath` is where a browser would save it (the Downloads folder, with a name that doesn't replace an existing file). Leave `DestinationPath` null to let the user choose in the save dialog (modal for the window), set it to save there without asking (an existing file is replaced), or set `Cancel`. Don't show dialogs from this handler. The file is downloaded to a temporary folder and moved to its destination when complete, so the save dialog can stay open while it downloads. `DownloadCompleted` reports every download that `DownloadStarting` let through: `Path` is null when the download failed or the user canceled the dialog. Without these events WKWebView wouldn't download at all; WebView2 no longer shows its download bar, nor asks before a page downloads more than one file. WKWebView and WebKitGTK start only the last of several downloads that the same script starts (e.g. consecutive `click()` calls on `<a download>` links): let a moment pass between them, e.g. with `setTimeout`.
 
-**Cookies.** `GetCookies()` returns all the cookies, `GetCookies(url)` those sent to that URL; `SetCookie` adds or replaces a cookie (same name, domain and path), `DeleteCookie` removes it:
+**Cookies.** `GetCookies()` returns all the cookies, `GetCookies(url)` those sent to that URL; `SetCookie` adds or replaces a cookie (same name, domain and path), `DeleteCookie` removes it. `RustinoCookie` has `Name`, `Value`, `Domain`, `Path`, `Expires`, `Secure`, `HttpOnly` and `SameSite` (`Strict`, `Lax`, `None`):
 
 ```csharp
 window.SetCookie(new RustinoCookie("session", token) { Domain = "example.com", Path = "/", Secure = true, HttpOnly = true });
@@ -637,7 +681,7 @@ All streams complete automatically when the window closes or is disposed.
 
 ### Rustino.NET.Reactive (companion package)
 
-For System.Reactive operators, add the `Rustino.NET.Reactive` package:
+For System.Reactive operators, add the `EdoardoTona.Rustino.Reactive` package:
 
 ```csharp
 using System.Reactive.Linq;
@@ -666,7 +710,7 @@ window.WhenFocusChangedDistinct()
 
 ## Blazor Hybrid (Rustino.Blazor)
 
-The `Rustino.Blazor` package hosts Razor components in a Rustino window, like Photino.Blazor. Components run in .NET and render into the native webview; the app is served from `app://localhost/`.
+The `EdoardoTona.Rustino.Blazor` package hosts Razor components in a Rustino window, like Photino.Blazor. Components run in .NET and render into the native webview; the app is served from `app://localhost/`.
 
 ```csharp
 using Rustino.Blazor;
@@ -739,6 +783,16 @@ cd ../Rustino.Samples.Blazor
 dotnet run
 ```
 
+### Samples
+
+- [`src/Rustino.Samples`](src/Rustino.Samples): a tabbed showcase of the window API — window state and chrome, JS
+  interop, dialogs and message boxes, menus and tray, notifications, badges, monitors, reactive streams, native
+  window features, webview (downloads, file drop, cookies, printing, devtools) and, in the **Launch** tab,
+  single instance, deep links, `Activate()` and `OpenExternal()`. Run it a second time, e.g.
+  `dotnet run -- rustino-sample://open?id=42`, to see the launch forwarded to the first process.
+- [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor): Blazor Hybrid with the `app://` custom scheme,
+  dependency injection and `HttpClient`.
+
 ### Interop contract tests
 
 The .NET tests compare every Rust C export with the P/Invoke imports, including callback signatures and platform
@@ -757,6 +811,13 @@ cd src/Rustino.Native
 UPDATE_ABI_SNAPSHOT=1 cargo test --release abi_layout
 ```
 
+### Releasing
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds the native library for the six platforms,
+packs the three packages and pushes them to NuGet.org with the `NUGET_API_KEY` secret. It runs when a GitHub
+release is published (the version is the tag without the leading `v`, e.g. `v0.4.0` → `0.4.0`) and attaches the
+packages to the release; run it manually to publish the `<Version>` of `src/Directory.Build.props`.
+
 ## Cross-Platform Support
 
 | Platform | WebView Engine | Native Library |
@@ -767,6 +828,6 @@ UPDATE_ABI_SNAPSHOT=1 cargo test --release abi_layout
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Based on [Rustino](https://github.com/Ivy-Interactive/Rustino) by Ivy Interactive.
 
 Inspired by and API-compatible with [Photino](https://tryphotino.io), originally created by TryPhotino (Apache-2.0).
