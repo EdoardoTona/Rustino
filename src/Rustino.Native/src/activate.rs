@@ -87,6 +87,7 @@ fn activate_macos(window: &Window) {
 
 #[cfg(target_os = "linux")]
 fn activate_linux(window: &Window, activation_token: Option<&str>) {
+    use gtk::prelude::GtkWindowExt;
     use tao::platform::unix::WindowExtUnix;
 
     let gtk_window = window.gtk_window();
