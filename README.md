@@ -814,7 +814,7 @@ UPDATE_ABI_SNAPSHOT=1 cargo test --release abi_layout
 ### Releasing
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the native library for the six platforms,
-packs the three packages and pushes them to NuGet.org with the `NUGET_API_KEY` secret. It runs when a GitHub
+packs the three packages and pushes them to NuGet.org through [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) (a short-lived key obtained with GitHub OIDC; the `NUGET_USER` secret holds the nuget.org profile name). It runs when a GitHub
 release is published (the version is the tag without the leading `v`, e.g. `v0.4.0` → `0.4.0`) and attaches the
 packages to the release; run it manually to publish the `<Version>` of `src/Directory.Build.props`.
 

@@ -2,6 +2,7 @@ name: Release NuGet
 
 permissions:
   contents: write
+  id-token: write # NuGet trusted publishing
 
 on:
   release:
@@ -136,10 +137,16 @@ jobs:
           echo "Packed NuGet packages:"
           ls -la ./nupkg/
 
+      - name: NuGet login (trusted publishing)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Push to NuGet.org
         run: |
           dotnet nuget push ./nupkg/*.nupkg \
-            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
