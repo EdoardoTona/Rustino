@@ -2,7 +2,6 @@ name: Release NuGet
 
 permissions:
   contents: write
-  id-token: write
 
 on:
   release:
@@ -65,7 +64,7 @@ jobs:
           name: native-${{ matrix.rid }}
           path: src/Rustino.Native/target/${{ matrix.target }}/release/${{ matrix.lib }}
 
-  pack-sign-publish:
+  pack-publish:
     needs: build-native
     runs-on: ubuntu-latest
     defaults:
@@ -105,36 +104,6 @@ jobs:
           echo "Staged native binaries:"
           find Rustino.NET/runtimes -type f
 
-      - name: Sign Windows native binaries
-        uses: sslcom/esigner-codesign@develop
-        with:
-          command: batch_sign
-          username: ${{ secrets.SSL_COM_USERNAME }}
-          password: ${{ secrets.SSL_COM_PASSWORD }}
-          credential_id: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
-          totp_secret: ${{ secrets.SSL_COM_TOTP_SECRET }}
-          malware_block: true
-          dir_path: src/Rustino.NET/runtimes/win-x64/native
-          output_path: src/signed-win-x64
-
-      - name: Replace with signed Windows x64 binaries
-        run: cp -f ./signed-win-x64/*.dll Rustino.NET/runtimes/win-x64/native/
-
-      - name: Sign Windows ARM64 native binaries
-        uses: sslcom/esigner-codesign@develop
-        with:
-          command: batch_sign
-          username: ${{ secrets.SSL_COM_USERNAME }}
-          password: ${{ secrets.SSL_COM_PASSWORD }}
-          credential_id: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
-          totp_secret: ${{ secrets.SSL_COM_TOTP_SECRET }}
-          malware_block: true
-          dir_path: src/Rustino.NET/runtimes/win-arm64/native
-          output_path: src/signed-win-arm64
-
-      - name: Replace with signed Windows ARM64 binaries
-        run: cp -f ./signed-win-arm64/*.dll Rustino.NET/runtimes/win-arm64/native/
-
       - name: Determine version
         id: version
         run: |
@@ -166,26 +135,6 @@ jobs:
 
           echo "Packed NuGet packages:"
           ls -la ./nupkg/
-
-      - name: Clean NuGet output before signing
-        run: |
-          find ./nupkg -mindepth 1 -maxdepth 1 -not -name "*.nupkg" -exec rm -rf {} +
-          mkdir -p ./nupkg_signed
-
-      - name: Sign NuGet packages
-        uses: sslcom/esigner-codesign@develop
-        with:
-          command: batch_sign
-          username: ${{ secrets.SSL_COM_USERNAME }}
-          password: ${{ secrets.SSL_COM_PASSWORD }}
-          credential_id: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
-          totp_secret: ${{ secrets.SSL_COM_TOTP_SECRET }}
-          malware_block: true
-          dir_path: src/nupkg
-          output_path: src/nupkg_signed
-
-      - name: Overwrite with signed packages
-        run: cp -f ./nupkg_signed/*.nupkg ./nupkg/
 
       - name: Push to NuGet.org
         run: |
@@ -226,6 +175,6 @@ jobs:
           done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Packages:**" >> $GITHUB_STEP_SUMMARY
-          echo "- [Rustino.NET](https://www.nuget.org/packages/Rustino.NET)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Rustino.NET.Reactive](https://www.nuget.org/packages/Rustino.NET.Reactive)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Rustino.Blazor](https://www.nuget.org/packages/Rustino.Blazor)" >> $GITHUB_STEP_SUMMARY
+          echo "- [EdoardoTona.Rustino](https://www.nuget.org/packages/EdoardoTona.Rustino)" >> $GITHUB_STEP_SUMMARY
+          echo "- [EdoardoTona.Rustino.Reactive](https://www.nuget.org/packages/EdoardoTona.Rustino.Reactive)" >> $GITHUB_STEP_SUMMARY
+          echo "- [EdoardoTona.Rustino.Blazor](https://www.nuget.org/packages/EdoardoTona.Rustino.Blazor)" >> $GITHUB_STEP_SUMMARY

@@ -4,13 +4,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PackageId>Rustino.NET</PackageId>
+    <PackageId>EdoardoTona.Rustino</PackageId>
     <Description>Cross-platform native webview windows powered by Rust (wry/tao). Drop-in replacement for Photino.NET.</Description>
-    <Authors>Ivy Interactive</Authors>
-    <Company>Ivy Interactive</Company>
+    <Authors>Edoardo Tona</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/Ivy-Interactive/Rustino</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/Ivy-Interactive/Rustino</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/EdoardoTona/Rustino</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/EdoardoTona/Rustino</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IsPackable>true</IsPackable>
     <PackageReadmeFile>README.md</PackageReadmeFile>
