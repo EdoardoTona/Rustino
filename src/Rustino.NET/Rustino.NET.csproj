@@ -48,14 +48,14 @@
              Link="$(_RustinoHostNativeStaged)" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('runtimes/')">
-    <!-- Staged cross-platform binaries follow the app to its output/publish directory... -->
-    <Content Include="runtimes/**/*"
-             Pack="false"
-             CopyToOutputDirectory="PreserveNewest"
-             Link="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
-    <!-- ...and ship inside the NuGet package for RID-aware consumers. -->
-    <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/" />
+  <ItemGroup>
+    <!--
+      Staged cross-platform binaries follow the app to its output/publish directory and ship inside
+      the NuGet package for RID-aware consumers. They must not also be Content with Pack="false":
+      NuGet pack excludes those files by path, which would drop them from the package as well.
+      PackagePath="/" because NuGet appends the relative path (runtimes/<rid>/native/...).
+    -->
+    <None Update="runtimes/**/*" Pack="true" PackagePath="/" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- NuGet packaging -->
