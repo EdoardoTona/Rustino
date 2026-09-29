@@ -1,6 +1,7 @@
 //! Native window features beyond the basic window state: light/dark theme, taskbar progress,
-//! attention requests, drag regions for chromeless windows, macOS title bar styles, less common
-//! window flags and the macOS app events (opened URLs, Dock click).
+//! attention requests, drag regions for chromeless windows, title bar styles (macOS styles, the
+//! overlay title bar of Windows and Linux), less common window flags and the macOS app events
+//! (opened URLs, Dock click).
 //!
 //! Their commands run in the event loop before `dispatch_command`, in
 //! [`WindowExtRuntime::handle_event`], which also has the event loop target they need on macOS.
@@ -28,7 +29,13 @@ const RESIZE_BORDER: u32 = 6;
 /// its children, so buttons in a title bar stay clickable) and maximizes it on double click.
 /// The drag starts when the mouse moves, so double clicks still reach the page. On chromeless
 /// windows the edges of the page resize the window: the native side sets their width with
-/// `setResizeBorder` (0 when the OS resizes the window or it can't be resized).
+/// `setState` (0 when the OS resizes the window or it can't be resized).
+///
+/// With the overlay title bar (Windows and Linux) `setState` also gets the window controls, which
+/// the script draws in the top corners, in a shadow root, and the page makes room for them with
+/// `--rustino-titlebar-height`, `--rustino-window-controls-left` and `--rustino-window-controls-right`.
+/// The color of the buttons follows `prefers-color-scheme`, `--rustino-window-controls-color` and,
+/// over both, the color set by the host.
 const DRAG_REGION_SCRIPT: &str = r#"(() => {
   if (window.__rustino_window) return;
   const post = (message) => window.ipc && window.ipc.postMessage('__rustino:' + message);
@@ -82,9 +89,95 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
   }, true);
   addEventListener('mouseup', () => { pressed = null; }, true);
 
-  Object.defineProperty(window, '__rustino_window', { value: Object.freeze({
-    setResizeBorder: (width) => { border = width; if (!width) setCursor(null); },
-  }) });
+  const GLYPHS = { minimize: '\uE921', maximize: '\uE922', restore: '\uE923', close: '\uE8BB' };
+  const ICONS = {
+    minimize: '<path d="M4 8.5h8"/>',
+    maximize: '<rect x="4.5" y="4.5" width="7" height="7" rx="1"/>',
+    restore: '<rect x="4.5" y="6.5" width="5" height="5" rx="1"/><path d="M6.5 4.5h5v5"/>',
+    close: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
+  };
+  const LABELS = { minimize: 'Minimize', maximize: 'Maximize', restore: 'Restore', close: 'Close' };
+  // `all: unset` on the buttons also drops the focus ring: keyboard users get it back
+  const COLOR = ':host{color:var(--rustino-window-controls-color,#000)}' +
+    '@media (prefers-color-scheme:dark){:host{color:var(--rustino-window-controls-color,#fff)}}' +
+    'button:focus-visible{outline:2px solid currentColor;outline-offset:-2px}';
+  const STYLES = {
+    windows: { height: 32, css: COLOR +
+      ':host{position:fixed;top:0;z-index:2147483647;display:flex;user-select:none;' +
+      "font:10px 'Segoe Fluent Icons','Segoe MDL2 Assets'}" +
+      'button{all:unset;width:46px;height:32px;display:flex;align-items:center;justify-content:center}' +
+      'button:hover{background:rgba(128,128,128,.2)}button:active{background:rgba(128,128,128,.3)}' +
+      'button.close:hover,button.close:active{background:#c42b1c;color:#fff}' +
+      'button:disabled{background:none;color:inherit;opacity:.35}' },
+    gnome: { height: 40, css: COLOR +
+      ':host{position:fixed;top:0;z-index:2147483647;display:flex;align-items:center;gap:12px;' +
+      'height:40px;padding:0 8px;box-sizing:border-box;user-select:none}' +
+      'button{all:unset;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;' +
+      'justify-content:center;background:color-mix(in srgb,currentColor 10%,transparent)}' +
+      'button:hover{background:color-mix(in srgb,currentColor 15%,transparent)}' +
+      'button:active{background:color-mix(in srgb,currentColor 30%,transparent)}' +
+      'svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5}' },
+  };
+  const hosts = {};
+
+  const renderControls = (controls) => {
+    const root = document.documentElement;
+    const style = controls && STYLES[controls.platform];
+    const widths = { left: 0, right: 0 };
+    for (const side of ['left', 'right']) {
+      const buttons = style ? controls[side] : [];
+      const property = '--rustino-window-controls-' + side;
+      if (!buttons.length) {
+        if (hosts[side]) hosts[side].remove();
+        root.style.removeProperty(property);
+        continue;
+      }
+      let host = hosts[side];
+      if (!host) {
+        host = hosts[side] = document.createElement('rustino-window-controls');
+        host.style[side] = '0';
+        host.attachShadow({ mode: 'open' }).addEventListener('click', (e) => {
+          const button = e.target.closest('button');
+          if (button && !button.disabled) post(button.dataset.action);
+        });
+      }
+      host.shadowRoot.innerHTML = '<style>' + style.css + '</style>' + buttons.map((b) => {
+        const icon = b.kind === 'maximize' && controls.maximized ? 'restore' : b.kind;
+        // The glyphs (Private Use Area) and the icons are hidden from screen readers: the label names the button
+        const content = controls.platform === 'windows' ? '<span aria-hidden="true">' + GLYPHS[icon] + '</span>'
+          : '<svg viewBox="0 0 16 16" aria-hidden="true">' + ICONS[icon] + '</svg>';
+        return '<button type="button" class="' + b.kind + '" data-action="' + b.kind + '" aria-label="' +
+          LABELS[icon] + '" title="' + LABELS[icon] + '"' + (b.enabled ? '' : ' disabled') + '>' + content + '</button>';
+      }).join('');
+      host.style.color = controls.color || '';
+      if (!host.isConnected) root.appendChild(host);
+      widths[side] = host.offsetWidth;
+      root.style.setProperty(property, widths[side] + 'px');
+    }
+    // Safe area of the title bar: the strip free of window controls, as the titlebar-area-*
+    // environment variables of the Window Controls Overlay
+    const area = style && {
+      '--rustino-titlebar-height': style.height + 'px',
+      '--rustino-titlebar-area-x': widths.left + 'px',
+      '--rustino-titlebar-area-y': '0px',
+      '--rustino-titlebar-area-width': 'calc(100vw - ' + (widths.left + widths.right) + 'px)',
+      '--rustino-titlebar-area-height': style.height + 'px',
+    };
+    for (const name of ['--rustino-titlebar-height', '--rustino-titlebar-area-x', '--rustino-titlebar-area-y',
+      '--rustino-titlebar-area-width', '--rustino-titlebar-area-height']) {
+      if (area) root.style.setProperty(name, area[name]);
+      else root.style.removeProperty(name);
+    }
+  };
+
+  const setState = (state) => {
+    border = state.border;
+    if (!border) setCursor(null);
+    if (document.documentElement) renderControls(state.controls);
+    else addEventListener('DOMContentLoaded', () => renderControls(state.controls), { once: true });
+  };
+
+  Object.defineProperty(window, '__rustino_window', { value: Object.freeze({ setState }) });
   post('ready');
 })();"#;
 
@@ -110,6 +203,34 @@ impl MacTitleBarStyle {
     }
 }
 
+/// What the page shows of the window: the width of the edges that resize it and the window
+/// controls of the overlay title bar.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+struct ChromeState {
+    border: u32,
+    controls: Option<WindowControls>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+struct WindowControls {
+    /// "windows" or "gnome": the look of the buttons
+    platform: &'static str,
+    maximized: bool,
+    /// CSS color set by the host, over the page's
+    color: Option<String>,
+    left: Vec<ControlButton>,
+    right: Vec<ControlButton>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+struct ControlButton {
+    /// "minimize", "maximize" or "close": also the IPC message of the button
+    kind: &'static str,
+    enabled: bool,
+}
+
 /// Options applied when the window is built.
 pub struct WindowExtOptions {
     pub theme: Option<Theme>,
@@ -125,6 +246,11 @@ pub struct WindowExtOptions {
     pub ignore_cursor_events: bool,
     pub mac_title_bar_style: MacTitleBarStyle,
     pub traffic_light_position: Option<(f64, f64)>,
+    /// Windows and Linux: the page extends to the top of the window, under window controls
+    /// drawn by the drag region script
+    pub title_bar_overlay: bool,
+    /// Color of the overlay title bar buttons (RGBA); `None` follows the page
+    pub title_bar_overlay_color: Option<(u8, u8, u8, u8)>,
     pub desktop_file_name: Option<String>,
     /// Off for apps that load untrusted pages: every page can send the script's messages
     pub drag_regions: bool,
@@ -145,6 +271,8 @@ impl Default for WindowExtOptions {
             ignore_cursor_events: false,
             mac_title_bar_style: MacTitleBarStyle::Default,
             traffic_light_position: None,
+            title_bar_overlay: false,
+            title_bar_overlay_color: None,
             desktop_file_name: None,
             drag_regions: true,
         }
@@ -169,6 +297,10 @@ pub enum WindowCommand {
     SetProgressBar(ProgressState, Option<u64>),
     RequestUserAttention(Option<UserAttentionType>),
     Beep,
+    /// Close button of the overlay title bar: the window closes as from its own close button
+    RequestClose,
+    /// Minimize button of the overlay title bar
+    Minimize,
     SetShadow(bool),
     SetSkipTaskbar(bool),
     SetContentProtection(bool),
@@ -180,6 +312,8 @@ pub enum WindowCommand {
     SetIgnoreCursorEvents(bool),
     SetMacTitleBarStyle(MacTitleBarStyle),
     SetTrafficLightPosition(f64, f64),
+    SetTitleBarOverlay(bool),
+    SetTitleBarOverlayColor(Option<(u8, u8, u8, u8)>),
     SetDesktopFileName(Option<String>),
     /// Deliver URL arguments through the registered `UrlsOpened` callback.
     DeliverUrls(Vec<String>),
@@ -217,6 +351,10 @@ impl WindowExt {
             builder = builder.with_always_on_bottom(true);
         }
 
+        #[cfg(not(target_os = "macos"))]
+        if options.title_bar_overlay {
+            builder = builder.with_decorations(false);
+        }
         #[cfg(target_os = "windows")]
         {
             use tao::platform::windows::WindowBuilderExtWindows;
@@ -274,10 +412,12 @@ impl WindowExt {
         }
     }
 
+    /// `decorated`: the decorations of the configuration, which the overlay title bar replaces
     pub fn start(
         self,
         window: &Window,
         state: &Arc<SharedState>,
+        decorated: bool,
         context: *mut c_void,
         #[allow(unused_variables)] proxy: EventLoopProxy<RustinoCommand>,
     ) -> WindowExtRuntime {
@@ -293,9 +433,14 @@ impl WindowExt {
             context,
             state: Arc::clone(state),
             skip_taskbar: self.options.skip_taskbar,
+            closable: self.options.closable,
+            minimizable: self.options.minimizable,
             maximizable: self.options.maximizable,
-            resize_border: None,
-            resize_border_dirty: false,
+            decorated,
+            title_bar_overlay: self.options.title_bar_overlay,
+            title_bar_overlay_color: self.options.title_bar_overlay_color,
+            chrome: None,
+            chrome_dirty: false,
             #[cfg(target_os = "macos")]
             mac_title_bar: MacTitleBar {
                 style: self.options.mac_title_bar_style,
@@ -338,12 +483,22 @@ pub struct WindowExtRuntime {
     state: Arc<SharedState>,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     skip_taskbar: bool,
+    /// The overlay title bar follows these flags, which Linux doesn't apply to its own buttons
+    closable: bool,
+    minimizable: bool,
     /// tao's `is_maximizable` reads the zoom button on macOS, which chromeless windows lack
     maximizable: bool,
-    /// Resize border last sent to the page
-    resize_border: Option<u32>,
-    /// The window state changed: check the resize border once the pending events are handled
-    resize_border_dirty: bool,
+    /// Decorations asked by the host: the overlay title bar keeps the native ones off
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    decorated: bool,
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    title_bar_overlay: bool,
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    title_bar_overlay_color: Option<(u8, u8, u8, u8)>,
+    /// Chrome state last sent to the page
+    chrome: Option<ChromeState>,
+    /// The window state changed: check the chrome state once the pending events are handled
+    chrome_dirty: bool,
     #[cfg(target_os = "macos")]
     mac_title_bar: MacTitleBar,
     #[cfg(target_os = "linux")]
@@ -362,6 +517,13 @@ impl WindowExtRuntime {
     ) -> Option<Event<'a, RustinoCommand>> {
         #[cfg(target_os = "macos")]
         self.mac_title_bar.follow(&event, window);
+        // The overlay title bar replaces the native decorations
+        #[cfg(not(target_os = "macos"))]
+        if let Event::UserEvent(RustinoCommand::SetDecorations(decorated)) = &event {
+            self.decorated = *decorated;
+            self.apply_decorations(window);
+            return None;
+        }
         match event {
             Event::UserEvent(RustinoCommand::Window(command)) => {
                 self.dispatch(command, target, window, webview);
@@ -383,7 +545,7 @@ impl WindowExtRuntime {
             | Event::WindowEvent {
                 event: WindowEvent::Resized(_),
                 ..
-            } => self.resize_border_dirty = true,
+            } => self.chrome_dirty = true,
             Event::WindowEvent {
                 event: WindowEvent::ThemeChanged(theme),
                 ..
@@ -418,9 +580,9 @@ impl WindowExtRuntime {
                     unsafe { cb(self.context, i32::from(has_visible_windows)) };
                 }
             }
-            Event::MainEventsCleared if self.resize_border_dirty => {
-                self.resize_border_dirty = false;
-                self.update_resize_border(window, webview, false);
+            Event::MainEventsCleared if self.chrome_dirty => {
+                self.chrome_dirty = false;
+                self.update_chrome(window, webview, false);
             }
             _ => {}
         }
@@ -448,6 +610,17 @@ impl WindowExtRuntime {
             WindowCommand::SetProgressBar(state, progress) => set_progress_bar(window, state, progress),
             WindowCommand::RequestUserAttention(kind) => window.request_user_attention(kind),
             WindowCommand::Beep => beep(),
+            WindowCommand::RequestClose => {
+                if self.closable {
+                    request_close(window);
+                }
+            }
+            WindowCommand::Minimize => {
+                if self.minimizable {
+                    window.set_minimized(true);
+                    self.state.is_minimized.store(true, Ordering::Release);
+                }
+            }
             #[allow(unused_variables)]
             WindowCommand::SetShadow(shadow) => {
                 #[cfg(target_os = "windows")]
@@ -466,11 +639,20 @@ impl WindowExtRuntime {
             WindowCommand::SetVisibleOnAllWorkspaces(visible) => {
                 window.set_visible_on_all_workspaces(visible)
             }
-            WindowCommand::SetClosable(closable) => window.set_closable(closable),
-            WindowCommand::SetMinimizable(minimizable) => window.set_minimizable(minimizable),
+            WindowCommand::SetClosable(closable) => {
+                window.set_closable(closable);
+                self.closable = closable;
+                self.chrome_dirty = true;
+            }
+            WindowCommand::SetMinimizable(minimizable) => {
+                window.set_minimizable(minimizable);
+                self.minimizable = minimizable;
+                self.chrome_dirty = true;
+            }
             WindowCommand::SetMaximizable(maximizable) => {
                 window.set_maximizable(maximizable);
                 self.maximizable = maximizable;
+                self.chrome_dirty = true;
             }
             WindowCommand::SetAlwaysOnBottom(on_bottom) => window.set_always_on_bottom(on_bottom),
             WindowCommand::SetIgnoreCursorEvents(ignore) => {
@@ -489,6 +671,18 @@ impl WindowExtRuntime {
                     window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
                     self.mac_title_bar.traffic_lights = Some((x, y));
                 }
+            }
+            #[allow(unused_variables)]
+            WindowCommand::SetTitleBarOverlay(overlay) => {
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.title_bar_overlay = overlay;
+                    self.apply_decorations(window);
+                }
+            }
+            WindowCommand::SetTitleBarOverlayColor(color) => {
+                self.title_bar_overlay_color = color;
+                self.chrome_dirty = true;
             }
             #[allow(unused_variables)]
             WindowCommand::SetDesktopFileName(name) => {
@@ -513,10 +707,10 @@ impl WindowExtRuntime {
                     let maximized = !window.is_maximized();
                     window.set_maximized(maximized);
                     self.state.is_maximized.store(maximized, Ordering::Release);
-                    self.resize_border_dirty = true;
+                    self.chrome_dirty = true;
                 }
             }
-            WindowCommand::PageReady => self.update_resize_border(window, webview, true),
+            WindowCommand::PageReady => self.update_chrome(window, webview, true),
             #[cfg(target_os = "linux")]
             WindowCommand::CheckTheme => self.theme_changed(window.theme()),
         }
@@ -531,13 +725,72 @@ impl WindowExtRuntime {
         }
     }
 
-    fn update_resize_border(&mut self, window: &Window, webview: &wry::WebView, force: bool) {
-        let border = resize_border(window);
-        if force || self.resize_border != Some(border) {
-            self.resize_border = Some(border);
+    #[cfg(not(target_os = "macos"))]
+    fn apply_decorations(&mut self, window: &Window) {
+        window.set_decorations(self.decorated && !self.title_bar_overlay);
+        self.chrome_dirty = true;
+    }
+
+    fn update_chrome(&mut self, window: &Window, webview: &wry::WebView, force: bool) {
+        let chrome = ChromeState {
+            border: resize_border(window),
+            controls: self.window_controls(window),
+        };
+        if force || self.chrome.as_ref() != Some(&chrome) {
+            let Ok(json) = serde_json::to_string(&chrome) else { return };
+            self.chrome = Some(chrome);
             let _ = webview.evaluate_script(&format!(
-                "window.__rustino_window && window.__rustino_window.setResizeBorder({border})"
+                "window.__rustino_window && window.__rustino_window.setState({json})"
             ));
+        }
+    }
+
+    /// The buttons of the overlay title bar, none in fullscreen
+    fn window_controls(&self, #[allow(unused_variables)] window: &Window) -> Option<WindowControls> {
+        #[cfg(target_os = "macos")]
+        {
+            None
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if !self.decorated || !self.title_bar_overlay || window.fullscreen().is_some() {
+                return None;
+            }
+            let enabled = |kind| match kind {
+                "minimize" => self.minimizable,
+                "maximize" => self.maximizable && window.is_resizable(),
+                _ => self.closable,
+            };
+            let maximized = window.is_maximized();
+            let color = self
+                .title_bar_overlay_color
+                .map(|(r, g, b, a)| format!("rgba({r},{g},{b},{})", f64::from(a) / 255.0));
+            // Windows greys out the disabled buttons, and leaves only close when both minimize
+            // and maximize are off
+            #[cfg(target_os = "windows")]
+            let controls = {
+                let kinds: &[&'static str] = if self.minimizable || self.maximizable {
+                    &["minimize", "maximize", "close"]
+                } else {
+                    &["close"]
+                };
+                let right = kinds.iter().map(|&kind| ControlButton { kind, enabled: enabled(kind) });
+                WindowControls { platform: "windows", maximized, color, left: Vec::new(), right: right.collect() }
+            };
+            // GTK places the buttons of the decoration layout and hides the disabled ones
+            #[cfg(target_os = "linux")]
+            let controls = {
+                let (left, right) = decoration_layout(&gtk_decoration_layout());
+                let buttons = |kinds: Vec<&'static str>| -> Vec<ControlButton> {
+                    kinds
+                        .into_iter()
+                        .filter(|&kind| enabled(kind))
+                        .map(|kind| ControlButton { kind, enabled: true })
+                        .collect()
+                };
+                WindowControls { platform: "gnome", maximized, color, left: buttons(left), right: buttons(right) }
+            };
+            Some(controls)
         }
     }
 }
@@ -593,6 +846,51 @@ impl MacTitleBar {
         if let Some((x, y)) = self.traffic_lights {
             window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
         }
+    }
+}
+
+/// The window buttons of a GTK decoration layout ("menu:minimize,maximize,close"): the ones
+/// before the colon on the left, the others on the right.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn decoration_layout(layout: &str) -> (Vec<&'static str>, Vec<&'static str>) {
+    let buttons = |side: &str| {
+        side.split(',')
+            .filter_map(|name| match name.trim() {
+                "minimize" => Some("minimize"),
+                "maximize" => Some("maximize"),
+                "close" => Some("close"),
+                _ => None,
+            })
+            .collect()
+    };
+    match layout.split_once(':') {
+        Some((left, right)) => (buttons(left), buttons(right)),
+        None => (buttons(layout), Vec::new()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn gtk_decoration_layout() -> String {
+    use gtk::prelude::ObjectExt;
+    gtk::Settings::default()
+        .and_then(|settings| settings.property::<Option<String>>("gtk-decoration-layout"))
+        .unwrap_or_else(|| "menu:minimize,maximize,close".to_owned())
+}
+
+/// Closes the window as its own close button does, through the host's closing callback.
+fn request_close(#[allow(unused_variables)] window: &Window) {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use tao::platform::windows::WindowExtWindows;
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+        let _ = PostMessageW(Some(HWND(window.hwnd() as _)), WM_CLOSE, WPARAM(0), LPARAM(0));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::GtkWindowExt;
+        use tao::platform::unix::WindowExtUnix;
+        window.gtk_window().close();
     }
 }
 
@@ -732,6 +1030,8 @@ fn parse_ipc_message(message: &str) -> Option<WindowCommand> {
         "drag" => WindowCommand::DragWindow,
         "maximize" => WindowCommand::ToggleMaximize,
         "ready" => WindowCommand::PageReady,
+        "minimize" => WindowCommand::Minimize,
+        "close" => WindowCommand::RequestClose,
         other => {
             let direction = match other.strip_prefix("resize:")? {
                 "n" => ResizeDirection::North,
@@ -865,6 +1165,8 @@ mod tests {
         assert!(matches!(parse_ipc_message("__rustino:drag"), Some(WindowCommand::DragWindow)));
         assert!(matches!(parse_ipc_message("__rustino:maximize"), Some(WindowCommand::ToggleMaximize)));
         assert!(matches!(parse_ipc_message("__rustino:ready"), Some(WindowCommand::PageReady)));
+        assert!(matches!(parse_ipc_message("__rustino:minimize"), Some(WindowCommand::Minimize)));
+        assert!(matches!(parse_ipc_message("__rustino:close"), Some(WindowCommand::RequestClose)));
         assert!(matches!(
             parse_ipc_message("__rustino:resize:nw"),
             Some(WindowCommand::DragResizeWindow(ResizeDirection::NorthWest))
@@ -911,6 +1213,34 @@ mod tests {
         assert!(options.drag_regions);
         assert!(!options.skip_taskbar && !options.content_protection && !options.ignore_cursor_events);
         assert_eq!(options.mac_title_bar_style, MacTitleBarStyle::Default);
+        assert!(!options.title_bar_overlay);
+    }
+
+    #[test]
+    fn gtk_decoration_layouts() {
+        assert_eq!(decoration_layout("menu:minimize,maximize,close"), (vec![], vec!["minimize", "maximize", "close"]));
+        assert_eq!(decoration_layout("appmenu:close"), (vec![], vec!["close"]));
+        assert_eq!(decoration_layout("close,minimize:"), (vec!["close", "minimize"], vec![]));
+        assert_eq!(decoration_layout("close:maximize"), (vec!["close"], vec!["maximize"]));
+        assert_eq!(decoration_layout(" minimize , close "), (vec!["minimize", "close"], vec![]));
+    }
+
+    #[test]
+    fn chrome_state_for_the_script() {
+        let chrome = ChromeState {
+            border: 6,
+            controls: Some(WindowControls {
+                platform: "windows",
+                maximized: true,
+                color: Some("rgba(224,224,224,1)".into()),
+                left: Vec::new(),
+                right: vec![ControlButton { kind: "close", enabled: false }],
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&chrome).unwrap(),
+            r#"{"border":6,"controls":{"platform":"windows","maximized":true,"color":"rgba(224,224,224,1)","left":[],"right":[{"kind":"close","enabled":false}]}}"#
+        );
     }
 
     #[cfg(target_os = "linux")]

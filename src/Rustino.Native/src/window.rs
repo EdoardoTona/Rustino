@@ -420,7 +420,7 @@ impl RustinoWindow {
             .store(config.visible, Ordering::Release);
 
         update_monitor_cache(&window, &self.state);
-        let mut ext = ext.start(&window, &self.state, callbacks.context, event_loop.create_proxy());
+        let mut ext = ext.start(&window, &self.state, config.decorations, callbacks.context, event_loop.create_proxy());
 
         let state = Arc::clone(&self.state);
 

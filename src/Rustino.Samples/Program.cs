@@ -170,12 +170,17 @@ window.Reopened += (_, hasVisibleWindows) =>
     if (!hasVisibleWindows) window.SetVisible(true).Focus();
 };
 
-// macOS: the tab bar takes the place of the title bar, next to the traffic lights
+// The tab bar takes the place of the title bar, next to the traffic lights (macOS) or the window
+// buttons drawn by Rustino (Windows, Linux)
 if (OperatingSystem.IsMacOS())
 {
     window.SetMacTitleBarStyle(MacTitleBarStyle.Overlay)
         .SetMacTrafficLightPosition(14, 12)
         .AddInitScript("document.documentElement.style.setProperty('--titlebar-inset', '80px');");
+}
+else
+{
+    window.SetTitleBarOverlay(true);
 }
 
 // --- Webview: file drop, downloads, document title ---
@@ -241,7 +246,7 @@ void HandleMessage(string msg)
         case "fullscreen": window.SetFullscreen(true); break;
         case "exit-fullscreen": window.SetFullscreen(false); break;
         case "chromeless": SetTitleBar("Chromeless"); break;
-        case "decorated": SetTitleBar(OperatingSystem.IsMacOS() ? "Overlay" : "Default"); break;
+        case "decorated": SetTitleBar("Overlay"); break;
         case "topmost-on": window.SetTopMost(true); break;
         case "topmost-off": window.SetTopMost(false); break;
         case "zoom-in": window.SetZoom(1.5); break;
@@ -494,13 +499,13 @@ void HandleWebViewMessage(string msg)
     }
 }
 
-// Chromeless, or decorated with a MacTitleBarStyle (only macOS tells Default and Overlay apart)
+// Chromeless, or decorated with a MacTitleBarStyle (macOS) or the overlay title bar (Windows, Linux)
 void SetTitleBar(string mode)
 {
     var chromeless = mode == "Chromeless";
     window.SetChromeless(chromeless);
     if (!chromeless)
-        window.SetMacTitleBarStyle(Enum.Parse<MacTitleBarStyle>(mode));
+        window.SetMacTitleBarStyle(Enum.Parse<MacTitleBarStyle>(mode)).SetTitleBarOverlay(mode == "Overlay");
     // Room for the traffic lights only when the page is under them
     var inset = OperatingSystem.IsMacOS() && mode == "Overlay" ? "80px" : "8px";
     window.ExecuteScript($"document.documentElement.style.setProperty('--titlebar-inset', '{inset}')");
@@ -566,11 +571,14 @@ static string Html() => """
     <title>Rustino Feature Showcase</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
+      /* Dark page: light window buttons whatever the system theme */
+      :root { color-scheme: dark; --rustino-window-controls-color: #e0e0e0; }
       body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
       /* Tab bar */
-      .tabs { display: flex; background: #16213e; border-bottom: 1px solid #333; padding: 0 8px 0 var(--titlebar-inset, 8px); flex-shrink: 0; }
-      .tab { padding: 10px 18px; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: #888; border-bottom: 2px solid transparent; transition: all 0.15s; user-select: none; }
+      /* The side borders keep the room of the window buttons out of the scrolling area */
+      .tabs { display: flex; background: #16213e; border-bottom: 1px solid #333; border-left: max(var(--titlebar-inset, 8px), var(--rustino-window-controls-left, 0px)) solid #16213e; border-right: var(--rustino-window-controls-right, 8px) solid #16213e; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; }
+      .tab { flex-shrink: 0; white-space: nowrap; padding: 10px 18px; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: #888; border-bottom: 2px solid transparent; transition: all 0.15s; user-select: none; }
       .tab:hover { color: #ccc; }
       .tab.active { color: #00d4ff; border-bottom-color: #00d4ff; }
 
@@ -905,7 +913,7 @@ static string Html() => """
           <h3>Title Bar</h3>
           <p style="color:#888;font-size:0.82rem;margin-bottom:8px">Chromeless or with the overlay title bar, the empty part of the tab bar (data-rustino-drag-region) moves the window and a double click maximizes it; chromeless windows resize from the edges.</p>
           <div class="row">
-            <button class="y" onclick="send('native:titlebar:Overlay')">Overlay Title Bar (macOS)</button>
+            <button class="y" onclick="send('native:titlebar:Overlay')">Overlay Title Bar</button>
             <button class="y" onclick="send('native:titlebar:Default')">Standard Title Bar</button>
             <button class="y" onclick="send('native:titlebar:Chromeless')">Chromeless</button>
             <label class="flag"><input type="checkbox" checked onchange="flag('shadow', this)"> Shadow</label>
@@ -1027,8 +1035,15 @@ static string Html() => """
       }
 
       // Tabs
+      // The tab bar scrolls sideways with the mouse wheel
+      document.querySelector('.tabs').addEventListener('wheel', e => {
+        if (e.deltaY === 0) return;
+        e.preventDefault();
+        e.currentTarget.scrollLeft += e.deltaY;
+      }, { passive: false });
       document.querySelectorAll('.tab').forEach(t => {
         t.addEventListener('click', () => {
+          t.scrollIntoView({ inline: 'nearest', block: 'nearest' });
           document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
           document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
           t.classList.add('active');

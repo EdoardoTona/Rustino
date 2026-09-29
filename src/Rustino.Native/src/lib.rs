@@ -1098,6 +1098,35 @@ pub unsafe extern "C" fn rustino_set_mac_title_bar_style(instance: *mut RustinoW
     };
 }
 
+/// Windows and Linux: the page extends to the top of the window, under window controls drawn by
+/// the drag region script. Ignored on macOS (see `rustino_set_mac_title_bar_style`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_title_bar_overlay(instance: *mut RustinoWindow, overlay: i32) {
+    let v = overlay != 0;
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetTitleBarOverlay(v), |o| {
+            o.title_bar_overlay = v
+        })
+    };
+}
+
+/// Color of the overlay title bar buttons; `a` 0 goes back to the page's color
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_title_bar_overlay_color(
+    instance: *mut RustinoWindow,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    let color = (a != 0).then_some((r, g, b, a));
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetTitleBarOverlayColor(color), |o| {
+            o.title_bar_overlay_color = color
+        })
+    };
+}
+
 /// Pre-run only: 0 once the window started. Without drag regions no page can move, resize or
 /// maximize the window through the `__rustino:` messages, which reach the host instead.
 #[unsafe(no_mangle)]

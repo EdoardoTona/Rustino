@@ -525,6 +525,8 @@ The platform limits below hold both before the window runs and while it runs.
 | `SetAlwaysOnBottom(bool)` | Keeps the window below the others, replacing `SetTopMost`. Linux: a request to the window manager, not supported on Wayland |
 | `SetIgnoreCursorEvents(bool)` | Mouse clicks go through the window, for overlays |
 | `SetMacTitleBarStyle(MacTitleBarStyle)` | macOS: `Default`, `Transparent` or `Overlay` (no title, the page under the traffic lights, like Slack or VS Code). `SetChromeless(false)` brings the style back |
+| `SetTitleBarOverlayColor(byte, byte, byte, byte)` / `ResetTitleBarOverlayColor()` | Color of the overlay title bar buttons, over the page's CSS |
+| `SetTitleBarOverlay(bool)` | Windows, Linux: the page extends to the top of the window, under minimize, maximize and close buttons drawn by Rustino, like VS Code (see below) |
 | `SetMacTrafficLightPosition(double, double)` | macOS: position of the traffic lights, in logical pixels |
 | `SetDesktopFileName(string)` | Linux: `.desktop` file of the app, for the dock badge and progress |
 | `SetDragRegionsEnabled(bool)` | Pre-run: drag regions and edge resizing from the page (on by default, see below) |
@@ -554,7 +556,35 @@ The elements with `data-rustino-drag-region` move the window, and a double click
 
 On Windows and Linux the page covers the resize borders of chromeless windows: its outer 6 pixels resize the window instead. macOS keeps its own resize borders. With `MacTitleBarStyle.Overlay` the page's title bar needs the attribute too.
 
-The drag region script talks to the native side with `window.ipc.postMessage` messages that start with `__rustino:` (like the print script on Windows and macOS, see [Webview](#webview)): they never reach `WebMessageReceived`, so don't use that prefix for your own messages. Any page loaded in the window can send them, and so move, resize or maximize it: if the window shows untrusted pages, call `SetDragRegionsEnabled(false)` before `WaitForClose()` (no script, and the `__rustino:` messages reach `WebMessageReceived` like the others, except `__rustino:print`, which only prints).
+#### Overlay title bar on Windows and Linux
+
+`SetTitleBarOverlay(true)` removes the native title bar and draws the minimize, maximize and close buttons over the page, in the top corner, like VS Code: Windows 11 caption buttons on Windows, GNOME round buttons on Linux (placed and filtered by the GTK `gtk-decoration-layout` setting). The buttons follow `SetMinimizable`, `SetMaximizable`, `SetClosable` and `SetResizable`, turn into restore when the window is maximized and go away in fullscreen; close raises `Closing` like the native button. The window keeps resizing from the page's edges, as a chromeless window.
+
+The page lays out its own title bar in the room left by the buttons, with CSS variables set on `<html>` only while the buttons show:
+
+```css
+header {
+  height: var(--rustino-titlebar-height, 32px);   /* 32px on Windows, 40px on Linux */
+  padding-left: var(--rustino-window-controls-left, 0px);
+  padding-right: var(--rustino-window-controls-right, 0px);
+}
+```
+
+The safe area of the title bar, the strip free of buttons, has the variables of the web's Window Controls Overlay (`env(titlebar-area-*)`): `--rustino-titlebar-area-x`, `--rustino-titlebar-area-y`, `--rustino-titlebar-area-width` and `--rustino-titlebar-area-height`, for content placed there directly:
+
+```css
+.search {
+  position: fixed;
+  left: var(--rustino-titlebar-area-x, 0px);
+  top: var(--rustino-titlebar-area-y, 0px);
+  width: var(--rustino-titlebar-area-width, 100%);
+  height: var(--rustino-titlebar-area-height, 32px);
+}
+```
+
+The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`), and on Windows 11 the Snap Layouts flyout doesn't open from the maximize button (Win+Z still works). On macOS the option is ignored: use `SetMacTitleBarStyle(MacTitleBarStyle.Overlay)`.
+
+The drag region script talks to the native side with `window.ipc.postMessage` messages that start with `__rustino:` (like the print script on Windows and macOS, see [Webview](#webview)): they never reach `WebMessageReceived`, so don't use that prefix for your own messages. Any page loaded in the window can send them, and so move, resize, maximize, minimize or close it: if the window shows untrusted pages, call `SetDragRegionsEnabled(false)` before `WaitForClose()` (no script, and the `__rustino:` messages reach `WebMessageReceived` like the others, except `__rustino:print`, which only prints).
 
 #### Tray apps on macOS
 

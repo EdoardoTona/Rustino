@@ -17,6 +17,8 @@ public partial class RustinoWindow
     private bool _alwaysOnBottom;
     private bool _ignoreCursorEvents;
     private MacTitleBarStyle _macTitleBarStyle;
+    private bool _titleBarOverlay;
+    private (byte R, byte G, byte B, byte A)? _titleBarOverlayColor;
     private (double X, double Y)? _trafficLightPosition;
     private string? _desktopFileName;
     private bool _dragRegions = true;
@@ -238,6 +240,51 @@ public partial class RustinoWindow
     }
 
     /// <summary>
+    /// Windows and Linux: the page extends to the top of the window, where Rustino draws the minimize, maximize and
+    /// close buttons over it (Windows 11 style, or GNOME style in the order of the GTK decoration layout), like the
+    /// title bar of VS Code. The page makes room for them with the CSS variables <c>--rustino-titlebar-height</c>,
+    /// <c>--rustino-window-controls-left</c> and <c>--rustino-window-controls-right</c>, set only while the buttons
+    /// show, and marks its title bar with <c>data-rustino-drag-region</c>. Needs drag regions
+    /// (<see cref="SetDragRegionsEnabled"/>); ignored on macOS, where <see cref="SetMacTitleBarStyle"/> with
+    /// <see cref="MacTitleBarStyle.Overlay"/> does the same. A chromeless window gets it back with
+    /// <c>SetChromeless(false)</c>.
+    /// </summary>
+    public RustinoWindow SetTitleBarOverlay(bool overlay)
+    {
+        ThrowIfDisposed();
+        _titleBarOverlay = overlay;
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoExtDllImports.rustino_set_title_bar_overlay(_nativeHandle, overlay ? 1 : 0);
+        return this;
+    }
+
+    /// <summary>
+    /// Color of the buttons of the overlay title bar (<see cref="SetTitleBarOverlay"/>), also while the window runs
+    /// and across page loads. It wins over the page's <c>--rustino-window-controls-color</c> and the
+    /// <c>prefers-color-scheme</c> default.
+    /// </summary>
+    public RustinoWindow SetTitleBarOverlayColor(byte r, byte g, byte b, byte a = 255)
+    {
+        ThrowIfDisposed();
+        if (a == 0)
+            throw new ArgumentOutOfRangeException(nameof(a), "Use ResetTitleBarOverlayColor to go back to the page's color.");
+        _titleBarOverlayColor = (r, g, b, a);
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoExtDllImports.rustino_set_title_bar_overlay_color(_nativeHandle, r, g, b, a);
+        return this;
+    }
+
+    /// <summary>The buttons of the overlay title bar take their color from the page again.</summary>
+    public RustinoWindow ResetTitleBarOverlayColor()
+    {
+        ThrowIfDisposed();
+        _titleBarOverlayColor = null;
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoExtDllImports.rustino_set_title_bar_overlay_color(_nativeHandle, 0, 0, 0, 0);
+        return this;
+    }
+
+    /// <summary>
     /// Elements with <c>data-rustino-drag-region</c> move the window, and on Windows and Linux the edges of the
     /// page resize chromeless windows (on by default). Any loaded page can use them: turn them off when the window
     /// shows untrusted pages. Must be called before <see cref="WaitForClose"/>.
@@ -318,6 +365,10 @@ public partial class RustinoWindow
             RustinoExtDllImports.rustino_set_ignore_cursor_events(_nativeHandle, 1);
         if (_macTitleBarStyle != MacTitleBarStyle.Default)
             RustinoExtDllImports.rustino_set_mac_title_bar_style(_nativeHandle, (int)_macTitleBarStyle);
+        if (_titleBarOverlay)
+            RustinoExtDllImports.rustino_set_title_bar_overlay(_nativeHandle, 1);
+        if (_titleBarOverlayColor is { } color)
+            RustinoExtDllImports.rustino_set_title_bar_overlay_color(_nativeHandle, color.R, color.G, color.B, color.A);
         if (_trafficLightPosition is { } lights)
             RustinoExtDllImports.rustino_set_traffic_light_position(_nativeHandle, lights.X, lights.Y);
         if (_desktopFileName != null)
