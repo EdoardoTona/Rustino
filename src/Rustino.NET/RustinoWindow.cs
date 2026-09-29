@@ -706,6 +706,7 @@ public partial class RustinoWindow : IDisposable
     public RustinoWindow SetMenuItemText(string id, string text)
     {
         ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
         if (_nativeHandle != IntPtr.Zero)
             RustinoDllImports.rustino_set_menu_item_text(_nativeHandle, id, text);
         return this;
@@ -713,6 +714,8 @@ public partial class RustinoWindow : IDisposable
 
     // --- System Tray (post-run) ---
 
+    // tooltip: also the icon's accessible name, defaulting to the window title (ignored on Linux,
+    // where only title identifies the icon).
     // title: text next to the icon (macOS, Linux). isTemplateIcon (macOS): the icon's alpha is used
     // as a mask that follows the menu bar's colors. menuOnLeftClick: false leaves left clicks to
     // TrayIconClicked (macOS, Windows).

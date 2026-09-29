@@ -441,12 +441,14 @@ A template icon uses only the image's alpha channel, so a colored icon turns int
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | `TrayIconClicked` | OK | OK | never raised¹ |
-| `tooltip` | OK | OK | not supported |
+| `tooltip` | OK | OK | not supported² |
 | `title`, `SetTrayTitle` | OK | not supported | only on some desktops |
 | `isTemplateIcon` | OK | ignored | ignored |
 | `menuOnLeftClick` | OK | OK | ignored: any click opens the menu |
 
 ¹ On Linux the tray icon is an AppIndicator (libayatana-appindicator), which doesn't report clicks: put every action in the tray menu.
+
+² The tooltip is the icon's accessible name; without one, the window title is used (macOS, Windows). On Linux tray-icon doesn't expose the AppIndicator title, so the icon has no accessible name: set `title` if the icon must be identified by assistive technologies.
 
 ### Taskbar Badge
 

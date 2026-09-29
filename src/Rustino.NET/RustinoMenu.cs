@@ -10,6 +10,7 @@ public partial class RustinoMenu
     // iconPath: image shown next to the label (scaled to the menu's icon size)
     public RustinoMenu AddItem(string id, string label, string? accelerator = null, bool enabled = true, string? iconPath = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label); // use AddSeparator() for spacing
         _items.Add(new MenuItemDef { Type = "normal", Id = id, Label = label, Accelerator = accelerator, Enabled = enabled, Icon = iconPath });
         return this;
     }
@@ -17,6 +18,7 @@ public partial class RustinoMenu
     // Clicking toggles the check mark and raises MenuItemClicked and MenuItemCheckedChanged.
     public RustinoMenu AddCheckItem(string id, string label, bool isChecked = false, bool enabled = true, string? accelerator = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label); // use AddSeparator() for spacing
         _items.Add(new MenuItemDef { Type = "check", Id = id, Label = label, Checked = isChecked, Enabled = enabled, Accelerator = accelerator });
         return this;
     }
@@ -32,6 +34,9 @@ public partial class RustinoMenu
     // Some items are omitted on Linux or do nothing on Windows (see README).
     public RustinoMenu AddPredefinedItem(PredefinedMenuItem item, string? label = null)
     {
+        // null keeps the native localized label
+        if (label is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(label);
         _items.Add(new MenuItemDef { Type = "predefined", Item = JsonNamingPolicy.SnakeCaseLower.ConvertName(item.ToString()), Label = label });
         return this;
     }
@@ -64,6 +69,7 @@ public partial class RustinoMenu
 
     private RustinoMenu AddSubmenuWithRole(string label, Action<RustinoMenu> build, bool enabled, string? role)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label); // use AddSeparator() for spacing
         var sub = new RustinoMenu();
         build(sub);
         _items.Add(new MenuItemDef { Type = "submenu", Label = label, Enabled = enabled, Role = role, Items = sub._items });

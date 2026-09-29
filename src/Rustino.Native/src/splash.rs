@@ -90,7 +90,7 @@ mod windows_splash {
             let y = (screen_h - height as i32) / 2;
 
             let hwnd = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 class_name,
                 w!(""),
                 WS_POPUP | WS_VISIBLE,

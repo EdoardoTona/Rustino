@@ -836,7 +836,9 @@ fn dispatch_command(
                     .with_icon(ico)
                     .with_icon_as_template(params.icon_is_template)
                     .with_menu_on_left_click(params.menu_on_left_click);
-                if let Some(ref tooltip) = params.tooltip {
+                // The tooltip is the icon's accessible name: fall back to the window title
+                let tooltip = params.tooltip.clone().unwrap_or_else(|| window.title());
+                if !tooltip.is_empty() {
                     builder = builder.with_tooltip(tooltip);
                 }
                 if let Some(ref title) = params.title {
@@ -1152,7 +1154,9 @@ fn set_badge_count_windows(window: &tao::window::Window, count: Option<u32>, bg:
             }
             Some(n) => {
                 if let Some(icon) = create_badge_icon(n, bg, fg) {
-                    let _ = taskbar.SetOverlayIcon(hwnd, icon, None);
+                    // Accessible description of the overlay, read by Narrator
+                    let description = windows::core::HSTRING::from(n.to_string());
+                    let _ = taskbar.SetOverlayIcon(hwnd, icon, &description);
                     let _ = DestroyIcon(icon);
                 }
             }
