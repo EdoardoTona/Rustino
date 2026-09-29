@@ -62,7 +62,7 @@ public partial class RustinoWindow
 
     private void DeliverDeepLinks(string[] urls)
     {
-        var json = JsonSerializer.Serialize(urls);
+        var json = JsonSerializer.Serialize(urls, DeepLinkJsonContext.Default.StringArray);
         lock (_lifecycleLock)
         {
             if (Volatile.Read(ref _disposed) != 0 || _nativeHandle == IntPtr.Zero)

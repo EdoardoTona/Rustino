@@ -13,6 +13,7 @@
     <RepositoryType>git</RepositoryType>
     <IsPackable>true</IsPackable>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <!--

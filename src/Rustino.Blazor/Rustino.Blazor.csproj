@@ -12,6 +12,7 @@
     <RepositoryUrl>https://github.com/EdoardoTona/Rustino</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>

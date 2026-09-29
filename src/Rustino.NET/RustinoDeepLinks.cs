@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Rustino.NET;
 
@@ -49,7 +50,7 @@ public static class RustinoDeepLinks
             if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !schemes.Contains(uri.Scheme))
                 continue;
 
-            var jsonValueBytes = JsonSerializer.SerializeToUtf8Bytes(value).Length;
+            var jsonValueBytes = JsonSerializer.SerializeToUtf8Bytes(value, DeepLinkJsonContext.Default.String).Length;
             var addedBytes = jsonValueBytes + (urls.Count == 0 ? 0 : 1);
             if (batchBytes + addedBytes > MaximumBatchBytes)
                 break;
@@ -75,3 +76,7 @@ public static class RustinoDeepLinks
 
     private static bool IsAsciiLetter(char value) => value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 }
+
+[JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(string[]))]
+internal partial class DeepLinkJsonContext : JsonSerializerContext;
