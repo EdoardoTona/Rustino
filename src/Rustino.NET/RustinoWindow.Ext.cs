@@ -114,6 +114,18 @@ public partial class RustinoWindow
     }
 
     /// <summary>
+    /// Plays the system alert sound: <c>MessageBeep</c> on Windows, <c>NSBeep</c> on macOS, the display
+    /// bell on Linux. No effect before the window runs.
+    /// </summary>
+    public RustinoWindow Beep()
+    {
+        ThrowIfDisposed();
+        if (_nativeHandle != IntPtr.Zero)
+            RustinoExtDllImports.rustino_beep(_nativeHandle);
+        return this;
+    }
+
+    /// <summary>
     /// Window shadow: on Windows it applies to chromeless windows, on macOS to all of them. Both platforms
     /// draw it by default; not supported on Linux.
     /// </summary>

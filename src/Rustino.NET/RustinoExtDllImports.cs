@@ -26,6 +26,9 @@ internal static partial class RustinoExtDllImports
     internal static extern void rustino_request_user_attention(IntPtr instance, int kind);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_beep(IntPtr instance);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_shadow(IntPtr instance, int shadow);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]

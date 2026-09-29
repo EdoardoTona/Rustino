@@ -168,6 +168,7 @@ pub enum WindowCommand {
     SetTheme(Option<Theme>),
     SetProgressBar(ProgressState, Option<u64>),
     RequestUserAttention(Option<UserAttentionType>),
+    Beep,
     SetShadow(bool),
     SetSkipTaskbar(bool),
     SetContentProtection(bool),
@@ -446,6 +447,7 @@ impl WindowExtRuntime {
             }
             WindowCommand::SetProgressBar(state, progress) => set_progress_bar(window, state, progress),
             WindowCommand::RequestUserAttention(kind) => window.request_user_attention(kind),
+            WindowCommand::Beep => beep(),
             #[allow(unused_variables)]
             WindowCommand::SetShadow(shadow) => {
                 #[cfg(target_os = "windows")]
@@ -644,6 +646,28 @@ fn set_progress_bar(window: &Window, state: ProgressState, progress: Option<u64>
         progress,
         desktop_filename: None,
     });
+}
+
+/// The system alert sound. On Linux it runs on the GTK thread, like the event loop.
+fn beep() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+        use windows::Win32::UI::WindowsAndMessaging::MB_OK;
+        let _ = MessageBeep(MB_OK);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "AppKit", kind = "framework")]
+        unsafe extern "C" {
+            fn NSBeep();
+        }
+        unsafe { NSBeep() };
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(display) = gtk::gdk::Display::default() {
+        display.beep();
+    }
 }
 
 #[cfg(target_os = "windows")]

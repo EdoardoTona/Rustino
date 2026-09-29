@@ -516,6 +516,7 @@ The platform limits below hold both before the window runs and while it runs.
 | `ScaleFactor` | Physical pixels per logical pixel on the window's monitor |
 | `SetProgressBar(ProgressBarState, int?)` / `ClearProgressBar()` | Progress on the taskbar button (Windows), the Dock icon (macOS) or the dock icon (Linux, LauncherEntry: see [Taskbar Badge](#taskbar-badge)) |
 | `RequestUserAttention(UserAttentionType)` / `CancelUserAttentionRequest()` | Flashes the taskbar button, bounces the Dock icon or sets the urgency hint, until the app is focused |
+| `Beep()` | Plays the system alert sound (`MessageBeep`, `NSBeep`, the GDK display bell) |
 | `SetShadow(bool)` | Window shadow (Windows: chromeless windows; macOS: all windows) |
 | `SetSkipTaskbar(bool)` | No taskbar button, for apps that live in the tray. On macOS the app leaves the Dock and the app switcher |
 | `SetContentProtection(bool)` | Keeps the window out of screenshots and recordings (Windows, macOS) |

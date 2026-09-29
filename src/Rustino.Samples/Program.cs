@@ -431,6 +431,7 @@ void HandleNativeMessage(string msg)
             Log($"Requesting attention ({type}) in 3 s: switch to another app");
             Task.Delay(3000).ContinueWith(_ => window.RequestUserAttention(type));
             break;
+        case "beep": window.Beep(); break;
         case "click-through":
             Log("The window ignores the mouse for 5 s");
             window.SetIgnoreCursorEvents(true);
@@ -897,6 +898,7 @@ static string Html() => """
           <div class="row">
             <button class="b" onclick="send('native:attention:Informational')">Informational</button>
             <button class="r" onclick="send('native:attention:Critical')">Critical</button>
+            <button class="o" onclick="send('native:beep')">Beep</button>
           </div>
         </div>
         <div class="card">

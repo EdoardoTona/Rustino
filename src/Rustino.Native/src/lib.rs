@@ -1013,6 +1013,12 @@ pub unsafe extern "C" fn rustino_request_user_attention(instance: *mut RustinoWi
     unsafe { run_window_feature(instance, window_ext::WindowCommand::RequestUserAttention(kind)) };
 }
 
+/// Plays the system alert sound
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_beep(instance: *mut RustinoWindow) {
+    unsafe { run_window_feature(instance, window_ext::WindowCommand::Beep) };
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rustino_set_shadow(instance: *mut RustinoWindow, shadow: i32) {
     let v = shadow != 0;
