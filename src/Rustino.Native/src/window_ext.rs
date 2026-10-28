@@ -11,12 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
+use tao::event_loop::EventLoopWindowTarget;
 use tao::window::{ProgressState, ResizeDirection, Theme, UserAttentionType, Window, WindowBuilder};
 use wry::WebViewBuilder;
 
 use crate::commands::RustinoCommand;
 use crate::state::SharedState;
+use crate::window::{CommandProxy, LoopEvent};
 
 /// Messages of the drag region script, which the IPC handler keeps from the host.
 const IPC_PREFIX: &str = "__rustino:";
@@ -405,7 +406,7 @@ impl WindowExt {
         }
     }
 
-    pub fn ipc_filter(&self, proxy: EventLoopProxy<RustinoCommand>) -> IpcFilter {
+    pub fn ipc_filter(&self, proxy: CommandProxy) -> IpcFilter {
         IpcFilter {
             proxy,
             enabled: self.options.drag_regions,
@@ -419,7 +420,7 @@ impl WindowExt {
         state: &Arc<SharedState>,
         decorated: bool,
         context: *mut c_void,
-        #[allow(unused_variables)] proxy: EventLoopProxy<RustinoCommand>,
+        #[allow(unused_variables)] proxy: CommandProxy,
     ) -> WindowExtRuntime {
         state.store_theme(theme_code(window.theme()));
         state.store_scale_factor(window.scale_factor());
@@ -455,7 +456,7 @@ impl WindowExt {
 
 /// Keeps the messages of the drag region script from the host and runs them in the event loop.
 pub struct IpcFilter {
-    proxy: EventLoopProxy<RustinoCommand>,
+    proxy: CommandProxy,
     /// Without drag regions all the messages go to the host
     enabled: bool,
 }
@@ -511,7 +512,7 @@ impl WindowExtRuntime {
     pub fn handle_event<'a>(
         &mut self,
         event: Event<'a, RustinoCommand>,
-        target: &EventLoopWindowTarget<RustinoCommand>,
+        target: &EventLoopWindowTarget<LoopEvent>,
         window: &Window,
         webview: &wry::WebView,
     ) -> Option<Event<'a, RustinoCommand>> {
@@ -592,7 +593,7 @@ impl WindowExtRuntime {
     fn dispatch(
         &mut self,
         command: WindowCommand,
-        target: &EventLoopWindowTarget<RustinoCommand>,
+        target: &EventLoopWindowTarget<LoopEvent>,
         window: &Window,
         #[allow(unused_variables)] webview: &wry::WebView,
     ) {
@@ -912,7 +913,7 @@ fn resize_border(#[allow(unused_variables)] window: &Window) -> u32 {
 }
 
 #[allow(unused_variables)]
-fn set_skip_taskbar(window: &Window, target: &EventLoopWindowTarget<RustinoCommand>, skip: bool) {
+fn set_skip_taskbar(window: &Window, target: &EventLoopWindowTarget<LoopEvent>, skip: bool) {
     #[cfg(target_os = "windows")]
     {
         use tao::platform::windows::WindowExtWindows;
@@ -1059,7 +1060,7 @@ struct GtkThemeWatch {
 
 #[cfg(target_os = "linux")]
 impl GtkThemeWatch {
-    fn new(proxy: EventLoopProxy<RustinoCommand>) -> Option<Self> {
+    fn new(proxy: CommandProxy) -> Option<Self> {
         use gtk::prelude::ObjectExt;
         let settings = gtk::Settings::default()?;
         let handlers = ["gtk-theme-name", "gtk-application-prefer-dark-theme"]

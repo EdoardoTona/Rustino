@@ -2,11 +2,11 @@ use std::borrow::Cow;
 use std::ffi::CString;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Once};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, mpsc};
 
 use tao::dpi::{PhysicalPosition, PhysicalSize};
-use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
+use tao::event::{Event, StartCause, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopClosed, EventLoopProxy, EventLoopWindowTarget};
 use tao::platform::run_return::EventLoopExtRunReturn;
 use tao::window::WindowBuilder;
 #[cfg(target_os = "windows")]
@@ -46,8 +46,97 @@ enum Phase {
     Created,
     /// `run` builds the window and the webview
     Starting,
-    Running(EventLoopProxy<RustinoCommand>),
+    Running(CommandProxy),
     Exited,
+}
+
+/// What the event loop of the app receives.
+pub enum LoopEvent {
+    /// A command for the window with this key
+    Command(usize, RustinoCommand),
+    /// A window started while the event loop runs
+    Host(Box<HostRequest>),
+}
+
+/// Sends commands to one window of the event loop.
+#[derive(Clone)]
+pub struct CommandProxy {
+    key: usize,
+    proxy: EventLoopProxy<LoopEvent>,
+}
+
+impl CommandProxy {
+    pub fn send_event(&self, cmd: RustinoCommand) -> Result<(), EventLoopClosed<LoopEvent>> {
+        self.proxy.send_event(LoopEvent::Command(self.key, cmd))
+    }
+}
+
+/// A window to build in the event loop of the app. `reply` gets the outcome, then disconnects
+/// once the window closes.
+pub struct HostRequest {
+    key: usize,
+    state: Arc<SharedState>,
+    started: Started,
+    reply: mpsc::Sender<Result<(), String>>,
+}
+
+// The host callbacks and their context are only used on the event loop thread, as for the first
+// window
+unsafe impl Send for HostRequest {}
+
+/// The event loop of the app: the windows started while it runs join it.
+enum AppLoopState {
+    Idle,
+    /// The first window is being built on this thread: the other windows wait for its event loop
+    Starting(std::thread::ThreadId),
+    Running(EventLoopProxy<LoopEvent>),
+}
+
+static APP_LOOP: Mutex<AppLoopState> = Mutex::new(AppLoopState::Idle);
+static APP_LOOP_CHANGED: Condvar = Condvar::new();
+
+fn app_loop() -> MutexGuard<'static, AppLoopState> {
+    APP_LOOP.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The event loop of the app, from the thread that starts it: back to idle when dropped, also
+/// when the first window fails.
+struct AppLoop;
+
+impl AppLoop {
+    /// Returns the event loop to join, or `AppLoop` when this thread starts it.
+    fn join_or_start() -> Result<Result<EventLoopProxy<LoopEvent>, AppLoop>, String> {
+        let this_thread = std::thread::current().id();
+        let mut state = app_loop();
+        loop {
+            match &*state {
+                AppLoopState::Running(proxy) => return Ok(Ok(proxy.clone())),
+                AppLoopState::Idle => {
+                    *state = AppLoopState::Starting(this_thread);
+                    return Ok(Err(AppLoop));
+                }
+                // E.g. from a callback while the first window is built: waiting would never end
+                AppLoopState::Starting(thread) if *thread == this_thread => {
+                    return Err("The event loop of the app is starting on this thread: start the other windows from another thread.".into());
+                }
+                AppLoopState::Starting(_) => {
+                    state = APP_LOOP_CHANGED.wait(state).unwrap_or_else(|e| e.into_inner());
+                }
+            }
+        }
+    }
+
+    fn set_running(&self, proxy: EventLoopProxy<LoopEvent>) {
+        *app_loop() = AppLoopState::Running(proxy);
+        APP_LOOP_CHANGED.notify_all();
+    }
+}
+
+impl Drop for AppLoop {
+    fn drop(&mut self) {
+        *app_loop() = AppLoopState::Idle;
+        APP_LOOP_CHANGED.notify_all();
+    }
 }
 
 /// What `run` takes from the setup.
@@ -166,8 +255,10 @@ impl RustinoWindow {
         })
     }
 
-    /// Runs the window on this thread until it closes. Fails when the window or the webview
-    /// can't be created (e.g. without the WebView2 Runtime).
+    /// Runs the window until it closes. The first window runs the event loop of the app on this
+    /// thread (on macOS, the main thread), until it closes with the windows that joined it. The
+    /// windows started while it runs join it and wait for their closing here. Fails when the
+    /// window or the webview can't be created (e.g. without the WebView2 Runtime).
     pub fn run(&self, started: Started) -> Result<(), String> {
         // Whatever happens, the window no longer runs afterwards
         struct Exit<'a>(&'a RustinoWindow);
@@ -182,21 +273,204 @@ impl RustinoWindow {
         }
         let _exit = Exit(self);
 
+        let app_loop = match AppLoop::join_or_start()? {
+            Ok(proxy) => return self.join(started, proxy),
+            // Dropped last, also on failure
+            Err(app_loop) => app_loop,
+        };
+
+        let mut builder = EventLoopBuilder::<LoopEvent>::with_user_event();
+        #[cfg(target_os = "windows")]
+        builder
+            .with_any_thread(true)
+            .with_msg_hook(|msg| crate::accelerators::translate(unsafe { &*msg.cast() }));
+        let mut event_loop = builder.build();
+        let proxy = event_loop.create_proxy();
+
+        let main = WindowRuntime::new(self.key(), &self.state, started, &event_loop, &proxy, true)?;
+        app_loop.set_running(proxy.clone());
+        self.set_running(main.proxy.clone());
+
+        // The first window runs the app: its closing closes the others
+        let mut windows = vec![main];
+        event_loop.run_return(move |event, target, control_flow| {
+            if *control_flow != ControlFlow::Exit {
+                *control_flow = ControlFlow::Wait;
+            }
+
+            let (index, event) = match event {
+                Event::UserEvent(LoopEvent::Host(request)) => {
+                    // Dropped once the app closes: its `run` fails
+                    if *control_flow != ControlFlow::Exit {
+                        windows.extend(WindowRuntime::host(*request, target, &proxy));
+                    }
+                    return;
+                }
+                Event::UserEvent(LoopEvent::Command(key, cmd)) => {
+                    // The commands of a closed window are dropped
+                    let Some(index) = windows.iter().position(|w| w.key == key) else {
+                        return;
+                    };
+                    (index, Event::UserEvent(cmd))
+                }
+                Event::MainEventsCleared => {
+                    for window in &mut windows {
+                        window.handle(Event::MainEventsCleared, target);
+                    }
+                    return;
+                }
+                Event::LoopDestroyed => {
+                    for window in &windows {
+                        window.closed();
+                    }
+                    return;
+                }
+                event => {
+                    let window_id = match &event {
+                        Event::WindowEvent { window_id, .. } | Event::RedrawRequested(window_id) => {
+                            Some(*window_id)
+                        }
+                        _ => None,
+                    };
+                    // The events of the app (opened URLs, Dock click, ...) go to the first window
+                    let index = match window_id {
+                        Some(id) => match windows.iter().position(|w| w.window.id() == id) {
+                            Some(index) => index,
+                            None => return,
+                        },
+                        None => 0,
+                    };
+                    let Ok(event) = event.map_nonuser_event() else {
+                        return;
+                    };
+                    (index, event)
+                }
+            };
+
+            if windows[index].handle(event, target) {
+                if index == 0 {
+                    *control_flow = ControlFlow::Exit;
+                } else {
+                    windows.remove(index).closed();
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// Runs the window in the event loop of the app, which runs on another thread, and waits for
+    /// its closing.
+    fn join(&self, started: Started, app_loop: EventLoopProxy<LoopEvent>) -> Result<(), String> {
+        // Waiting here would block the event loop
+        if crate::invoke::runs_event_loop() {
+            return Err("The event loop of the app runs on this thread: start the other windows from another thread.".into());
+        }
+        let (reply, replies) = mpsc::channel();
+        let request = HostRequest {
+            key: self.key(),
+            state: Arc::clone(&self.state),
+            started,
+            reply,
+        };
+        let closed = || "The app closed before the window could open.".to_string();
+        app_loop
+            .send_event(LoopEvent::Host(Box::new(request)))
+            .map_err(|_| closed())?;
+        replies.recv().map_err(|_| closed())??;
+        self.set_running(CommandProxy {
+            key: self.key(),
+            proxy: app_loop,
+        });
+        // Disconnects once the window closes
+        let _ = replies.recv();
+        Ok(())
+    }
+
+    /// The window exists: the commands sent until now come first, in order.
+    fn set_running(&self, proxy: CommandProxy) {
+        let mut setup = self.setup();
+        for cmd in setup.pending.drain(..) {
+            let _ = proxy.send_event(cmd);
+        }
+        setup.phase = Phase::Running(proxy);
+    }
+}
+
+/// A window of the event loop, with what its events need.
+struct WindowRuntime {
+    key: usize,
+    proxy: CommandProxy,
+    callbacks: RustinoCallbacks,
+    config: WindowConfig,
+    state: Arc<SharedState>,
+    ext: crate::window_ext::WindowExtRuntime,
+    menu_items: menu::MenuItems,
+    current_menu: Option<muda::Menu>,
+    tray: Option<Tray>,
+    _menu_events: EventLoopRegistration,
+    /// Keeps the window and the webview reachable from `invoke`
+    _running: crate::invoke::RunningGuard,
+    // Dropped before the window
+    webview: Rc<wry::WebView>,
+    window: Rc<tao::window::Window>,
+    _web_context: Option<wry::WebContext>,
+    /// Windows that joined the event loop: disconnects once the window closes, which ends its `run`
+    closed_reply: Option<mpsc::Sender<Result<(), String>>>,
+}
+
+impl WindowRuntime {
+    /// Builds a window that joins the running event loop, and tells its `run` the outcome.
+    fn host(
+        request: HostRequest,
+        target: &EventLoopWindowTarget<LoopEvent>,
+        proxy: &EventLoopProxy<LoopEvent>,
+    ) -> Option<Self> {
+        let HostRequest {
+            key,
+            state,
+            started,
+            reply,
+        } = request;
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Self::new(key, &state, started, target, proxy, false)
+        }))
+        .unwrap_or_else(|panic| Err(crate::panic_message(panic.as_ref())));
+        match built {
+            Ok(mut window) => {
+                // The event loop started before the window
+                window.handle(Event::NewEvents(StartCause::Init), target);
+                let _ = reply.send(Ok(()));
+                window.closed_reply = Some(reply);
+                Some(window)
+            }
+            Err(message) => {
+                let _ = reply.send(Err(message));
+                None
+            }
+        }
+    }
+
+    /// Builds the window and its webview. `main`: the window that runs the event loop.
+    fn new(
+        key: usize,
+        state: &Arc<SharedState>,
+        started: Started,
+        target: &EventLoopWindowTarget<LoopEvent>,
+        proxy: &EventLoopProxy<LoopEvent>,
+        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] main: bool,
+    ) -> Result<Self, String> {
         let Started {
-            mut config,
+            config,
             callbacks,
             ext,
             webview_ext,
         } = started;
 
         warn_unsupported_settings(&config);
-
-        let mut builder = EventLoopBuilder::<RustinoCommand>::with_user_event();
-        #[cfg(target_os = "windows")]
-        builder
-            .with_any_thread(true)
-            .with_msg_hook(|msg| crate::accelerators::translate(unsafe { &*msg.cast() }));
-        let mut event_loop = builder.build();
+        let proxy = CommandProxy {
+            key,
+            proxy: proxy.clone(),
+        };
 
         // --- Build window ---
         let mut window_builder = WindowBuilder::new()
@@ -237,7 +511,7 @@ impl RustinoWindow {
         window_builder = ext.configure_window(window_builder);
 
         let window = window_builder
-            .build(&event_loop)
+            .build(target)
             .map_err(|e| format!("Failed to create the window: {e}"))?;
 
         if config.center {
@@ -296,13 +570,13 @@ impl RustinoWindow {
         }
 
         webview_builder = ext.configure_webview(webview_builder);
-        let ipc_filter = ext.ipc_filter(event_loop.create_proxy());
-        let print_filter = crate::webview_ext::PrintFilter::new(event_loop.create_proxy());
+        let ipc_filter = ext.ipc_filter(proxy.clone());
+        let print_filter = crate::webview_ext::PrintFilter::new(proxy.clone());
         webview_builder = webview_ext.configure(
             webview_builder,
             callbacks.context,
-            &self.state,
-            event_loop.create_proxy(),
+            state,
+            proxy.clone(),
         );
 
         for script in &config.initialization_scripts {
@@ -389,7 +663,8 @@ impl RustinoWindow {
 
         #[cfg(target_os = "windows")]
         {
-            crate::accelerators::attach_webview(&webview);
+            use tao::platform::windows::WindowExtWindows;
+            crate::accelerators::attach_webview(&webview, window.hwnd());
             crate::webview_ext::allow_multiple_downloads(&webview);
         }
 
@@ -400,154 +675,160 @@ impl RustinoWindow {
 
         // Reachable from the callbacks, which run on this thread
         let (window, webview) = (Rc::new(window), Rc::new(webview));
-        let running = self.register_running(&window, &webview);
+        let running = crate::invoke::register_running(key, &window, &webview);
 
         // Initialize shared state from actual window
         let size = window.inner_size();
         let pos = window
             .outer_position()
             .unwrap_or(PhysicalPosition::new(0, 0));
-        self.state.store_size(size.width, size.height);
-        self.state.store_position(pos.x, pos.y);
-        self.state
+        state.store_size(size.width, size.height);
+        state.store_position(pos.x, pos.y);
+        state
             .is_maximized
             .store(window.is_maximized(), Ordering::Release);
-        self.state
+        state
             .is_fullscreen
             .store(config.fullscreen, Ordering::Release);
-        self.state
+        state
             .is_visible
             .store(config.visible, Ordering::Release);
 
-        update_monitor_cache(&window, &self.state);
-        let mut ext = ext.start(&window, &self.state, config.decorations, callbacks.context, event_loop.create_proxy());
-
-        let state = Arc::clone(&self.state);
+        update_monitor_cache(&window, state);
+        let ext = ext.start(&window, state, config.decorations, callbacks.context, proxy.clone());
 
         // Menu and tray events reach this window through its event loop
-        let _event_loop_registration = register_event_loop(event_loop.create_proxy());
+        let menu_events = register_event_loop(proxy.clone(), &window);
 
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut menu_items = menu::MenuItems::default();
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut current_menu: Option<muda::Menu> = None;
+        // The menu bar of macOS belongs to the app: the other windows keep it
         #[cfg(target_os = "macos")]
-        {
+        if main {
             let about = about_metadata(&config);
             if let Some(built) = menu::build_menu(DEFAULT_MACOS_MENU, &about) {
                 set_menu_bar(built, &window, &config, &about, &mut current_menu, &mut menu_items);
             }
         }
 
-        let mut tray: Option<Tray> = None;
+        Ok(Self {
+            key,
+            proxy,
+            callbacks,
+            config,
+            state: Arc::clone(state),
+            ext,
+            menu_items,
+            current_menu,
+            tray: None,
+            _menu_events: menu_events,
+            _running: running,
+            webview,
+            window,
+            _web_context: web_context,
+            closed_reply: None,
+        })
+    }
 
-        // The commands sent until now come first, in order
-        {
-            let mut setup = self.setup();
-            let proxy = event_loop.create_proxy();
-            for cmd in setup.pending.drain(..) {
-                let _ = proxy.send_event(cmd);
+    /// Handles an event of this window. Returns true when the window closes.
+    fn handle(&mut self, event: Event<'_, RustinoCommand>, target: &EventLoopWindowTarget<LoopEvent>) -> bool {
+        let Some(event) = self.ext.handle_event(event, target, &self.window, &self.webview) else {
+            return false;
+        };
+
+        let (window, state, callbacks) = (&self.window, &self.state, self.callbacks);
+        #[allow(clippy::collapsible_match)]
+        match event {
+            Event::UserEvent(cmd) => {
+                return dispatch_command(
+                    cmd,
+                    window,
+                    &self.webview,
+                    state,
+                    callbacks,
+                    &mut self.menu_items,
+                    &mut self.current_menu,
+                    &mut self.config,
+                    &mut self.tray,
+                );
             }
-            setup.phase = Phase::Running(proxy);
+            Event::WindowEvent {
+                event: ref win_event, ..
+            } => {
+                // These flags can change from the native window manager without a
+                // Rustino command (for example, the user minimizes the window).
+                state
+                    .is_minimized
+                    .store(window.is_minimized(), Ordering::Release);
+                state
+                    .is_fullscreen
+                    .store(window.fullscreen().is_some(), Ordering::Release);
+
+                match win_event {
+                    WindowEvent::CloseRequested => {
+                        if let Some(cb) = callbacks.on_closing {
+                            if unsafe { cb(callbacks.context) } != 0 {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    WindowEvent::Resized(size) => {
+                        state.store_size(size.width, size.height);
+                        state
+                            .is_maximized
+                            .store(window.is_maximized(), Ordering::Release);
+                        if let Some(cb) = callbacks.on_resized {
+                            unsafe {
+                                cb(callbacks.context, size.width as i32, size.height as i32)
+                            };
+                        }
+                    }
+                    WindowEvent::Moved(pos) => {
+                        state.store_position(pos.x, pos.y);
+                        update_monitor_cache(window, state);
+                        if let Some(cb) = callbacks.on_moved {
+                            unsafe { cb(callbacks.context, pos.x, pos.y) };
+                        }
+                    }
+                    WindowEvent::Focused(focused) => {
+                        state.is_focused.store(*focused, Ordering::Release);
+                        if let Some(cb) = callbacks.on_focus_changed {
+                            unsafe {
+                                cb(callbacks.context, if *focused { 1 } else { 0 })
+                            };
+                        }
+                    }
+                    WindowEvent::KeyboardInput { .. } => {
+                        // Forward keyboard events to the webview by not consuming them
+                        // The webview's internal handler will process these events
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
+        false
+    }
 
-        event_loop.run_return(move |event, target, control_flow| {
-            if *control_flow != ControlFlow::Exit {
-                *control_flow = ControlFlow::Wait;
-            }
-
-            let Some(event) = ext.handle_event(event, target, &window, &webview) else {
-                return;
-            };
-
-            #[allow(clippy::collapsible_match)]
-            match event {
-                Event::UserEvent(cmd) => {
-                    if dispatch_command(
-                        cmd,
-                        &window,
-                        &webview,
-                        &state,
-                        callbacks,
-                        &mut menu_items,
-                        &mut current_menu,
-                        &mut config,
-                        &mut tray,
-                    ) {
-                        *control_flow = ControlFlow::Exit;
-                    }
-                }
-                Event::WindowEvent {
-                    event: ref win_event, ..
-                } => {
-                    // These flags can change from the native window manager without a
-                    // Rustino command (for example, the user minimizes the window).
-                    state
-                        .is_minimized
-                        .store(window.is_minimized(), Ordering::Release);
-                    state
-                        .is_fullscreen
-                        .store(window.fullscreen().is_some(), Ordering::Release);
-
-                    match win_event {
-                        WindowEvent::CloseRequested => {
-                            if let Some(cb) = callbacks.on_closing {
-                                if unsafe { cb(callbacks.context) } != 0 {
-                                    return;
-                                }
-                            }
-                            *control_flow = ControlFlow::Exit;
-                        }
-                        WindowEvent::Resized(size) => {
-                            state.store_size(size.width, size.height);
-                            state
-                                .is_maximized
-                                .store(window.is_maximized(), Ordering::Release);
-                            if let Some(cb) = callbacks.on_resized {
-                                unsafe {
-                                    cb(callbacks.context, size.width as i32, size.height as i32)
-                                };
-                            }
-                        }
-                        WindowEvent::Moved(pos) => {
-                            state.store_position(pos.x, pos.y);
-                            update_monitor_cache(&window, &state);
-                            if let Some(cb) = callbacks.on_moved {
-                                unsafe { cb(callbacks.context, pos.x, pos.y) };
-                            }
-                        }
-                        WindowEvent::Focused(focused) => {
-                            state.is_focused.store(*focused, Ordering::Release);
-                            if let Some(cb) = callbacks.on_focus_changed {
-                                unsafe {
-                                    cb(callbacks.context, if *focused { 1 } else { 0 })
-                                };
-                            }
-                        }
-                        WindowEvent::KeyboardInput { .. } => {
-                            // Forward keyboard events to the webview by not consuming them
-                            // The webview's internal handler will process these events
-                        }
-                        _ => {}
-                    }
-                }
-                Event::LoopDestroyed => {
-                    if let Some(cb) = callbacks.on_closed {
-                        unsafe { cb(callbacks.context) };
-                    }
-                }
-                _ => {}
-            }
-        });
-
-        drop(running);
-        Ok(())
+    /// Tells the host that the window closed.
+    fn closed(&self) {
+        if let Some(cb) = self.callbacks.on_closed {
+            unsafe { cb(self.callbacks.context) };
+        }
     }
 }
 
-/// Event loops of the running windows, which receive the menu and tray events.
-static EVENT_LOOPS: Mutex<Vec<(u64, EventLoopProxy<RustinoCommand>)>> = Mutex::new(Vec::new());
+/// The running windows, which receive the menu and tray events.
+static EVENT_LOOPS: Mutex<Vec<(u64, CommandProxy)>> = Mutex::new(Vec::new());
 
-/// The event loop stays registered until the returned value is dropped.
-fn register_event_loop(proxy: EventLoopProxy<RustinoCommand>) -> EventLoopRegistration {
+/// The window stays registered until the returned value is dropped.
+fn register_event_loop(
+    proxy: CommandProxy,
+    #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] window: &tao::window::Window,
+) -> EventLoopRegistration {
     static NEXT_KEY: AtomicU64 = AtomicU64::new(0);
     static INSTALL_HANDLERS: Once = Once::new();
     // muda and tray-icon keep the first event handler for the whole process: it forwards the
@@ -580,18 +861,30 @@ fn register_event_loop(proxy: EventLoopProxy<RustinoCommand>) -> EventLoopRegist
     if let Ok(mut loops) = EVENT_LOOPS.lock() {
         loops.push((key, proxy));
     }
-    EventLoopRegistration(key)
+    EventLoopRegistration {
+        key,
+        #[cfg(target_os = "windows")]
+        hwnd: {
+            use tao::platform::windows::WindowExtWindows;
+            window.hwnd()
+        },
+    }
 }
 
-struct EventLoopRegistration(u64);
+struct EventLoopRegistration {
+    key: u64,
+    /// The menu accelerators of the window go with it
+    #[cfg(target_os = "windows")]
+    hwnd: isize,
+}
 
 impl Drop for EventLoopRegistration {
     fn drop(&mut self) {
         if let Ok(mut loops) = EVENT_LOOPS.lock() {
-            loops.retain(|(k, _)| *k != self.0);
+            loops.retain(|(k, _)| *k != self.key);
         }
         #[cfg(target_os = "windows")]
-        crate::accelerators::set_menu(0, None, 0);
+        crate::accelerators::set_menu(self.hwnd, None, 0);
     }
 }
 
@@ -1601,5 +1894,128 @@ mod tests {
         let defs: Vec<crate::menu::MenuItemDef> =
             serde_json::from_str(super::DEFAULT_MACOS_MENU).unwrap();
         assert_eq!(defs.len(), 2, "Edit and Window submenus");
+    }
+
+    /// The windows started while the app runs join its event loop (on macOS the only one there
+    /// can be), and close with its first window. Opens hidden windows: needs WebView2.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_started_while_the_app_runs_join_its_event_loop() {
+        use super::RustinoWindow;
+        use crate::commands::RustinoCommand;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        // The host's handle: the callbacks run on the event loop thread
+        #[derive(Clone, Copy)]
+        struct Handle(&'static RustinoWindow);
+        unsafe impl Send for Handle {}
+
+        unsafe extern "C" fn on_closed(context: *mut std::ffi::c_void) {
+            unsafe { &*(context as *const AtomicUsize) }.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn new_window(closed: &'static AtomicUsize) -> Handle {
+            let mut config = crate::config::WindowConfig::default();
+            config.visible = false;
+            config.start_html = Some("<p>Rustino</p>".into());
+            let window = Box::leak(Box::new(RustinoWindow::new(config)));
+            window.configure(|s| {
+                s.callbacks.context = closed as *const AtomicUsize as *mut _;
+                s.callbacks.on_closed = Some(on_closed);
+            });
+            Handle(window)
+        }
+
+        fn run(window: Handle) -> thread::JoinHandle<Result<(), String>> {
+            thread::spawn(move || {
+                let window = window;
+                let started = window.0.start()?;
+                window.0.run(started)
+            })
+        }
+
+        fn wait_until(what: &str, condition: impl Fn() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !condition() {
+                assert!(Instant::now() < deadline, "timed out waiting until {what}");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn loop_thread(window: Handle) -> thread::ThreadId {
+            window.0.invoke(|_, _| thread::current().id()).expect("the window runs")
+        }
+
+        let closed: [&'static AtomicUsize; 3] = std::array::from_fn(|_| &*Box::leak(Box::new(AtomicUsize::new(0))));
+        let main = new_window(closed[0]);
+        let main_run = run(main);
+        wait_until("the main window runs", || main.0.is_running());
+
+        // A window joins the event loop and closes alone
+        let second = new_window(closed[1]);
+        let second_run = run(second);
+        wait_until("the second window runs", || second.0.is_running());
+        assert_eq!(loop_thread(second), loop_thread(main), "one event loop");
+        assert!(second.0.send_command(RustinoCommand::Close));
+        assert_eq!(second_run.join().unwrap(), Ok(()));
+        assert_eq!(closed[1].load(Ordering::SeqCst), 1, "closed once");
+        assert!(main.0.is_running(), "the main window stays");
+        assert_eq!(closed[0].load(Ordering::SeqCst), 0);
+
+        // The event loop thread can't wait for another window
+        let blocked = Handle(Box::leak(Box::new(RustinoWindow::new(Default::default()))));
+        let error = main
+            .0
+            .invoke(move |_, _| {
+                let blocked = blocked;
+                let started = blocked.0.start()?;
+                blocked.0.run(started)
+            })
+            .unwrap();
+        assert!(error.unwrap_err().contains("another thread"));
+
+        // The main window closes the windows that joined it
+        let third = new_window(closed[2]);
+        let third_run = run(third);
+        wait_until("the third window runs", || third.0.is_running());
+        assert!(main.0.send_command(RustinoCommand::Close));
+        assert_eq!(main_run.join().unwrap(), Ok(()));
+        assert_eq!(third_run.join().unwrap(), Ok(()));
+        assert_eq!(closed[0].load(Ordering::SeqCst), 1);
+        assert_eq!(closed[2].load(Ordering::SeqCst), 1);
+        assert!(!third.0.is_running());
+        assert!(matches!(*super::app_loop(), super::AppLoopState::Idle), "the app closed");
+
+        // Windows started together share one event loop: the others wait for the first one
+        let unused = Box::leak(Box::new(AtomicUsize::new(0)));
+        let together: Vec<Handle> = (0..3).map(|_| new_window(unused)).collect();
+        let barrier = Arc::new(std::sync::Barrier::new(together.len()));
+        let runs: Vec<_> = together
+            .iter()
+            .map(|&window| {
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    let window = window;
+                    let started = window.0.start()?;
+                    barrier.wait();
+                    window.0.run(started)
+                })
+            })
+            .collect();
+        for window in &together {
+            wait_until("the windows started together run", || window.0.is_running());
+        }
+        let first = loop_thread(together[0]);
+        assert!(together.iter().all(|&w| loop_thread(w) == first), "one event loop");
+        for window in &together {
+            window.0.send_command(RustinoCommand::Close);
+        }
+        for run in runs {
+            assert_eq!(run.join().unwrap(), Ok(()));
+        }
+        assert!(matches!(*super::app_loop(), super::AppLoopState::Idle));
     }
 }

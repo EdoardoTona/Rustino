@@ -66,6 +66,9 @@ pub unsafe extern "C" fn rustino_dtor(instance: *mut RustinoWindow) {
 
 /// Runs the window until it closes. Returns 0 when it closed, 1 when it failed: the window or the
 /// webview couldn't be created, it already ran, or the native code panicked.
+/// The first window runs the event loop of the app on the calling thread (on macOS, the main
+/// thread). The windows started while it runs join that event loop, from any other thread, and
+/// close with the first one.
 /// `error_out` receives an owned UTF-8 error string on failure; free it with
 /// `rustino_free_string`. When the host destroyed the window meanwhile, it's freed before
 /// returning.
@@ -109,7 +112,7 @@ pub unsafe extern "C" fn rustino_wait_for_exit(
     status
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     let detail = payload
         .downcast_ref::<&str>()
         .map(|s| s.to_string())

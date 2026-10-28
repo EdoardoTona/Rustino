@@ -17,7 +17,11 @@
 
   <ItemGroup>
     <ProjectReference Include="../Rustino.NET/Rustino.NET.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebView" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rustino.Blazor.Tests" />
   </ItemGroup>
 
 </Project>

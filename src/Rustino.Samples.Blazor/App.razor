@@ -1,6 +1,8 @@
 @implements IDisposable
 @inject RustinoWindow Window
 @inject IJSRuntime JS
+@inject RustinoBlazorApp BlazorApp
+@inject SharedCounter Counter
 
 <h1>Rustino.Blazor</h1>
 <p class="muted">Razor components running in .NET, rendered in a native Rustino window.</p>
@@ -45,6 +47,17 @@
     <p>JS → .NET: the OS color scheme is <strong>@colorScheme</strong> (try changing it).</p>
 </section>
 
+<section>
+    <h2>Windows</h2>
+    <p>Shared counter <strong>@Counter.Value</strong> · Open windows <strong>@windows.Count</strong></p>
+    <div class="row">
+        <button @onclick="OpenWindow">Open window</button>
+        <button @onclick="Counter.Increment">Increment shared</button>
+        <button @onclick="CloseWindows" disabled="@(windows.Count == 0)">Close windows</button>
+    </div>
+    <p class="muted">Each window renders its own component with the app's services. Closing this window closes them all.</p>
+</section>
+
 @code {
     private readonly RustinoMenu contextMenu = new RustinoMenu()
         .AddItem("increment", "Increment")
@@ -58,6 +71,8 @@
     private string? userAgent;
     private string colorScheme = "unknown";
     private DotNetObjectReference<App>? selfRef;
+    private readonly List<RustinoWindow> windows = new();
+    private int windowNumber;
 
     protected override void OnInitialized()
     {
@@ -65,6 +80,8 @@
         Window.SizeChanged += OnSizeChanged;
         Window.FocusChanged += OnFocusChanged;
         Window.MenuItemClicked += OnMenuItemClicked;
+        Counter.Changed += OnCounterChanged;
+        BlazorApp.WindowFailed += OnWindowFailed;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -100,11 +117,40 @@
     private void OnMenuItemClicked(object? sender, string id) =>
         InvokeAsync(() => { count = id == "increment" ? count + 1 : 0; StateHasChanged(); });
 
+    private void OnCounterChanged() => InvokeAsync(StateHasChanged);
+
+    private void OpenWindow()
+    {
+        var number = ++windowNumber;
+        var window = BlazorApp.OpenWindow<SecondWindow>(
+            "#app",
+            new Dictionary<string, object?> { [nameof(SecondWindow.Number)] = number },
+            w => w.SetTitle($"Window {number}").SetSize(560, 520));
+        window.WindowClosed += (_, _) => InvokeAsync(() => { windows.Remove(window); StateHasChanged(); });
+        windows.Add(window);
+    }
+
+    private void OnWindowFailed(object? sender, WindowFailedEventArgs e) =>
+        InvokeAsync(() =>
+        {
+            windows.Remove(e.Window);
+            Window.ShowMessage("Window failed", e.Exception.Message, RustinoDialogButtons.Ok, RustinoDialogIcon.Error);
+            StateHasChanged();
+        });
+
+    private void CloseWindows()
+    {
+        foreach (var window in windows.ToList())
+            window.Close();
+    }
+
     public void Dispose()
     {
         Window.SizeChanged -= OnSizeChanged;
         Window.FocusChanged -= OnFocusChanged;
         Window.MenuItemClicked -= OnMenuItemClicked;
+        Counter.Changed -= OnCounterChanged;
+        BlazorApp.WindowFailed -= OnWindowFailed;
         selfRef?.Dispose();
     }
 }

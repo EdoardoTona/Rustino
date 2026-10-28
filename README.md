@@ -147,8 +147,32 @@ window and webview exist.
 | `GetCookies(string?)` / `SetCookie(RustinoCookie)` / `DeleteCookie(RustinoCookie)` | Read and change the webview's cookies (see [Webview](#webview)) |
 | `SetBadgeCount(int?, string?, string?)` | Set taskbar/dock badge with optional bg/fg hex colors |
 | `ClearBadge()` | Remove the taskbar/dock badge |
-| `WaitForClose()` | Block until the window is closed; throws `RustinoException` if native window or webview creation fails |
+| `WaitForClose()` | Block until the window is closed; throws `RustinoException` if native window or webview creation fails (see [Multiple Windows](#multiple-windows)) |
 | `Dispose()` | Release native resources (`RustinoWindow` implements `IDisposable`) |
+
+### Multiple Windows
+
+The first window runs the app's event loop on the thread that calls its `WaitForClose()`, which must be the main
+thread on macOS. Windows started while it runs join that event loop. This works the same way on every platform,
+macOS included, where AppKit allows only one event loop. Call their `WaitForClose()` from another thread: it only
+waits for the window to close.
+
+```csharp
+var second = new RustinoWindow().SetTitle("Second window").Load("wwwroot/second.html");
+second.WebMessageReceived += (_, message) => Console.WriteLine(message);
+new Thread(() =>
+{
+    second.WaitForClose();
+    second.Dispose();
+}) { IsBackground = true }.Start();
+```
+
+- The events of every window are raised on the first window's thread.
+- Windows started at the same moment don't create two event loops: the first one starts it, and the others wait for it and join.
+- A window closes on its own (user or `Close()`). Closing the first window closes them all, and every `WaitForClose()` returns.
+- Calling `WaitForClose()` of another window on the event loop thread (e.g. from an event handler) throws
+  `RustinoException`, because that thread can't block. Start a thread as above.
+- On macOS the menu bar belongs to the app: set it from the first window. `SetMenu` from another window replaces it.
 
 ### Single Instance
 
@@ -784,6 +808,37 @@ Inside components:
 
 Static files come from `wwwroot` next to the executable (published apps) or from the project during development. Pass an `IFileProvider` to `CreateDefault` to serve them from somewhere else (e.g. embedded resources).
 
+### Multiple windows
+
+`OpenWindow<TComponent>` opens another window with the same host page and renders a root component in it. Inject `RustinoBlazorApp` to call it from a component:
+
+```razor
+@inject RustinoBlazorApp App
+
+<button @onclick="OpenDetails">Details</button>
+
+@code {
+    private void OpenDetails() =>
+        App.OpenWindow<Details>(
+            "#app",
+            new Dictionary<string, object?> { [nameof(Details.Id)] = 42 },  // root component parameters
+            window => window.SetTitle("Details").SetSize(600, 400));
+}
+```
+
+The window shares the app's singleton services, while scoped services are per window. Its components that inject `RustinoWindow` get the new window, not the main one. Scoped services are different: the container resolves `RustinoWindow` in their constructors to the main window. Have them inject `RustinoWindowAccessor` and use its `Window`, which is the window of their page in every window, the main one included:
+
+```csharp
+builder.Services.AddScoped<EditorService>();
+
+public class EditorService(RustinoWindowAccessor accessor)
+{
+    public void Close() => accessor.Window.Close();   // the window of this page
+}
+```
+
+ It closes when the user closes it, with `Close()` on the returned `RustinoWindow`, or when the main window closes. When the window can't open (e.g. its webview fails), `RustinoBlazorApp.WindowFailed` is raised with the window and the exception, and the window is disposed. Call it while `Run()` runs; see [Multiple Windows](#multiple-windows) for how the windows share the event loop.
+
 See [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor) for a complete example.
 
 ## Building from Source
@@ -826,7 +881,7 @@ dotnet run
   single instance, deep links, `Activate()` and `OpenExternal()`. Run it a second time, e.g.
   `dotnet run -- rustino-sample://open?id=42`, to see the launch forwarded to the first process.
 - [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor): Blazor Hybrid with the `app://` custom scheme,
-  dependency injection and `HttpClient`.
+  dependency injection, `HttpClient` and other windows that share a singleton service with the main one.
 
 ### Interop contract tests
 
@@ -837,6 +892,10 @@ exists in the built native library for the current platform:
 ```bash
 dotnet test src/Rustino.NET.Tests/Rustino.NET.Tests.csproj -c Release
 ```
+
+On Windows, `MultiWindowTests` (and the Rust test `windows_started_while_the_app_runs_join_its_event_loop`) open
+hidden windows, so they need a desktop session and the WebView2 Runtime. `src/Rustino.Blazor.Tests` covers the
+services of the Blazor windows.
 
 Build `src/Rustino.Native` with `cargo build --release` first to enable the binary export check. The Rust ABI
 snapshot is checked by `cargo test --release`; after an intentional ABI layout change, update it with:

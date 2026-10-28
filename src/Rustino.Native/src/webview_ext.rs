@@ -12,13 +12,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tao::event_loop::EventLoopProxy;
 use wry::cookie::{Cookie, SameSite};
 use wry::{DragDropEvent, WebViewBuilder};
 
 use crate::commands::RustinoCommand;
 use crate::dialogs::{self, DialogParams, FileDialogKind};
 use crate::invoke::Task;
+use crate::window::CommandProxy;
 use crate::state::SharedState;
 
 /// Keeps the browser's context menu from opening where WebView2's setting doesn't exist. The
@@ -46,11 +46,11 @@ const PRINT_MESSAGE: &str = "__rustino:print";
 /// Keeps the messages of `PRINT_SCRIPT` from the host and opens the print dialog.
 pub struct PrintFilter {
     #[cfg_attr(target_os = "linux", allow(dead_code))]
-    proxy: EventLoopProxy<RustinoCommand>,
+    proxy: CommandProxy,
 }
 
 impl PrintFilter {
-    pub fn new(proxy: EventLoopProxy<RustinoCommand>) -> Self {
+    pub fn new(proxy: CommandProxy) -> Self {
         Self { proxy }
     }
 
@@ -128,7 +128,7 @@ impl WebViewExt {
         builder: WebViewBuilder<'a>,
         context: *mut c_void,
         state: &Arc<SharedState>,
-        proxy: EventLoopProxy<RustinoCommand>,
+        proxy: CommandProxy,
     ) -> WebViewBuilder<'a> {
         let options = &self.options;
         let host = Host {
@@ -425,7 +425,7 @@ fn download_starting(
     path: &mut PathBuf,
     host: Host,
     downloads: &Arc<Mutex<Downloads>>,
-    proxy: &EventLoopProxy<RustinoCommand>,
+    proxy: &CommandProxy,
 ) -> bool {
     let suggested = path.clone();
     let mut destination = Destination::Asking;
@@ -469,7 +469,7 @@ fn ask_destination(
     window: &tao::window::Window,
     downloads: &Mutex<Downloads>,
     host: Host,
-    proxy: EventLoopProxy<RustinoCommand>,
+    proxy: CommandProxy,
 ) {
     let suggested = lock(downloads).list.iter().find(|d| d.id == id).map(|d| d.suggested.clone());
     let Some(suggested) = suggested else {
@@ -491,7 +491,7 @@ fn ask_destination(
 }
 
 /// Moves the file to its destination and reports the download to the host.
-fn complete(download: Download, host: Host, proxy: EventLoopProxy<RustinoCommand>) {
+fn complete(download: Download, host: Host, proxy: CommandProxy) {
     // Across volumes the move copies the file: not on the event loop thread
     std::thread::spawn(move || {
         let path = match (&download.destination, download.finished) {

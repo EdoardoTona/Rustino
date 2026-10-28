@@ -1,0 +1,48 @@
+@implements IDisposable
+@inject RustinoWindow Window
+@inject SharedCounter Counter
+
+<h1>Window @Number</h1>
+<p class="muted">A second Blazor root component, in its own native window.</p>
+
+<section>
+    <h2>Shared service</h2>
+    <p class="count">@Counter.Value</p>
+    <button @onclick="Counter.Increment">Increment</button>
+    <p class="muted">The same singleton as the main window: every window shows the new value.</p>
+</section>
+
+<section>
+    <h2>This window</h2>
+    <p>Size <strong>@size.Width × @size.Height</strong></p>
+    <div class="row">
+        <button @onclick='() => Window.SetTitle($"Window {Number} ({Counter.Value})")'>Set title</button>
+        <button @onclick="() => Window.Close()">Close</button>
+    </div>
+    <p class="muted">The injected RustinoWindow is this window, not the main one.</p>
+</section>
+
+@code {
+    [Parameter] public int Number { get; set; }
+
+    private (int Width, int Height) size;
+
+    protected override void OnInitialized()
+    {
+        size = Window.GetSize();
+        Window.SizeChanged += OnSizeChanged;
+        Counter.Changed += OnCounterChanged;
+    }
+
+    // Native events and the other windows arrive outside this window's renderer: use InvokeAsync
+    private void OnSizeChanged(object? sender, SizeEventArgs e) =>
+        InvokeAsync(() => { size = (e.Width, e.Height); StateHasChanged(); });
+
+    private void OnCounterChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Window.SizeChanged -= OnSizeChanged;
+        Counter.Changed -= OnCounterChanged;
+    }
+}

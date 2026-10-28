@@ -38,6 +38,8 @@ using (var splash = new RustinoSplashscreen(splashPath, 400, 400))
 }
 
 var window = new RustinoWindow();
+// Windows opened from the page (see OpenWindow)
+var windowCount = 0;
 
 // --- Application menu bar ---
 var appMenu = new RustinoMenu()
@@ -454,7 +456,33 @@ void HandleNativeMessage(string msg)
         case "info":
             Log($"Theme: {window.Theme}, scale factor: {window.ScaleFactor}");
             break;
+        case "open-window": OpenWindow(); break;
     }
+}
+
+// The window joins the event loop of the main window: its thread only waits for the closing
+void OpenWindow()
+{
+    var number = ++windowCount;
+    var other = new RustinoWindow()
+        .SetTitle($"Window {number}")
+        .SetUseOsDefaultSize(false)
+        .SetSize(480, 320)
+        .Load("data:text/html," + Uri.EscapeDataString($"""
+            <body style="font-family:system-ui;padding:16px 24px">
+              <h2>Window {number}</h2>
+              <p>It runs in the event loop of the main window and closes with it.</p>
+              <button onclick="window.ipc.postMessage('hello')">Say hello to the main window</button>
+            </body>
+            """));
+    other.WebMessageReceived += (_, message) => Log($"Window {number}: {message}");
+    other.WindowClosed += (_, _) => Log($"Window {number} closed");
+    new Thread(() =>
+    {
+        other.WaitForClose();
+        other.Dispose();
+    }) { IsBackground = true }.Start();
+    Log($"Window {number} opened");
 }
 
 void HandleWebViewMessage(string msg)
@@ -907,6 +935,13 @@ static string Html() => """
             <button class="b" onclick="send('native:attention:Informational')">Informational</button>
             <button class="r" onclick="send('native:attention:Critical')">Critical</button>
             <button class="o" onclick="send('native:beep')">Beep</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Windows</h3>
+          <p style="color:#888;font-size:0.82rem;margin-bottom:8px">Other windows join the event loop of this one (on every platform, macOS included) and close with it.</p>
+          <div class="row">
+            <button class="b" onclick="send('native:open-window')">Open Window</button>
           </div>
         </div>
         <div class="card">

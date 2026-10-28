@@ -23,8 +23,14 @@ public class RustinoBlazorAppBuilder
             .AddScoped(sp => new HttpClient(new RustinoHttpHandler(sp.GetRequiredService<RustinoWebViewManager>()))
             {
                 BaseAddress = RustinoWebViewManager.AppBaseUri
-            });
+            })
+            // The main window, unless a window opened with OpenWindow sets its own (see RustinoWindowServices)
+            .AddScoped(sp => new RustinoWindowAccessor(sp.GetRequiredService<RustinoWindow>()))
+            // Components open windows through the app
+            .AddSingleton(_ => _app ?? throw new InvalidOperationException("The app is not built yet."));
     }
+
+    private RustinoBlazorApp? _app;
 
     public static RustinoBlazorAppBuilder CreateDefault(string[]? args = null) => CreateDefault(null, args);
 
@@ -37,7 +43,7 @@ public class RustinoBlazorAppBuilder
 
     public RootComponentList RootComponents { get; } = new();
 
-    public RustinoBlazorApp Build() => new(Services.BuildServiceProvider(), RootComponents);
+    public RustinoBlazorApp Build() => _app = new(Services.BuildServiceProvider(), RootComponents);
 
     // Published apps ship `wwwroot` next to the executable. During development the WebView
     // static web assets manifest serves the project's `wwwroot` and `_framework` files instead.

@@ -864,14 +864,16 @@ public partial class RustinoWindow : IDisposable
 
     // --- Blocking run ---
 
+    /// <summary>
+    /// Shows the window and blocks until it closes. The first window runs the app's event loop
+    /// on the calling thread (on macOS, the main thread). Windows started while it runs join
+    /// that event loop: call their WaitForClose() from another thread. Their events are raised
+    /// on the first window's thread, and they close when the first window closes.
+    /// </summary>
     /// <exception cref="RustinoException">The native window or its webview could not be created, or the native event loop failed.</exception>
     public void WaitForClose()
     {
         ThrowIfDisposed();
-        if (OperatingSystem.IsMacOS() && Thread.CurrentThread.ManagedThreadId != 1)
-            throw new InvalidOperationException(
-                "On macOS, WaitForClose() must be called from the main thread. " +
-                "The AppKit event loop requires the main thread to function correctly.");
 
         IntPtr nativeHandle;
         lock (_lifecycleLock)

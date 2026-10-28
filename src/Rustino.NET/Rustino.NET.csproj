@@ -43,10 +43,7 @@
     of consuming apps and packed into the NuGet package.
   -->
   <ItemGroup Condition="Exists('$(_RustinoHostNativeSource)') And '$(_RustinoHostNativeFileName)' != '' And !Exists('$(_RustinoHostNativeStaged)')">
-    <Content Include="$(_RustinoHostNativeSource)"
-             Pack="false"
-             CopyToOutputDirectory="PreserveNewest"
-             Link="$(_RustinoHostNativeStaged)" />
+    <Content Include="$(_RustinoHostNativeSource)" Pack="false" CopyToOutputDirectory="PreserveNewest" Link="$(_RustinoHostNativeStaged)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -66,7 +63,7 @@
 
   <!-- Dependencies -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
   </ItemGroup>
 
 </Project>

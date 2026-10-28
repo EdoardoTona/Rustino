@@ -81,21 +81,27 @@ impl Drop for RunningGuard {
     }
 }
 
-impl RustinoWindow {
-    fn key(&self) -> usize {
-        self as *const Self as usize
-    }
+/// Called on the event loop thread once the webview of the window `key` exists.
+pub(crate) fn register_running(key: usize, window: &Rc<Window>, webview: &Rc<WebView>) -> RunningGuard {
+    RUNNING.with(|running| {
+        running.borrow_mut().push(Running {
+            key,
+            webview: Rc::clone(webview),
+            window: Rc::clone(window),
+        })
+    });
+    RunningGuard(key)
+}
 
-    /// Called by `run` on the event loop thread once the webview exists.
-    pub(crate) fn register_running(&self, window: &Rc<Window>, webview: &Rc<WebView>) -> RunningGuard {
-        RUNNING.with(|running| {
-            running.borrow_mut().push(Running {
-                key: self.key(),
-                webview: Rc::clone(webview),
-                window: Rc::clone(window),
-            })
-        });
-        RunningGuard(self.key())
+/// Whether the event loop of a window runs on this thread.
+pub(crate) fn runs_event_loop() -> bool {
+    RUNNING.with(|running| !running.borrow().is_empty())
+}
+
+impl RustinoWindow {
+    /// Identifies the window in its event loop.
+    pub(crate) fn key(&self) -> usize {
+        self as *const Self as usize
     }
 
     /// The window and the webview, when called from the event loop thread.
