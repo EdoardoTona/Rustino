@@ -1351,6 +1351,16 @@ impl Tray {
 }
 
 fn load_tray_icon(path: &str) -> Option<tray_icon::Icon> {
+    // Windows: an .ico is loaded by the system at the small icon size, from its closest frame. Decoded as an image
+    // its largest frame would be used, and the shell shrinks that one without filtering (jagged edges).
+    #[cfg(target_os = "windows")]
+    if path.to_ascii_lowercase().ends_with(".ico") {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSMICON};
+        let size = unsafe { GetSystemMetrics(SM_CXSMICON) } as u32;
+        if let Ok(icon) = tray_icon::Icon::from_path(path, Some((size, size))) {
+            return Some(icon);
+        }
+    }
     let img = image::open(path).ok()?.into_rgba8();
     let (w, h) = img.dimensions();
     tray_icon::Icon::from_rgba(img.into_raw(), w, h).ok()

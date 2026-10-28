@@ -438,6 +438,8 @@ window.RemoveTrayIcon();
 
 A template icon uses only the image's alpha channel, so a colored icon turns into a solid silhouette: use it with a black shape on a transparent background.
 
+On Windows pass an `.ico` with the small sizes (16, 20, 24, 32): it's loaded at the system's small icon size from its closest frame. Any other image is used at its own size and the shell shrinks it without filtering, which leaves jagged edges.
+
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | `TrayIconClicked` | OK | OK | never raised¹ |
