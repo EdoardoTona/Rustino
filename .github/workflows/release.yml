@@ -167,6 +167,16 @@ jobs:
           echo "Packed NuGet packages:"
           ls -la ./nupkg/
 
+      - name: Check native binaries in the package
+        run: |
+          pkg=./nupkg/EdoardoTona.Rustino.${{ steps.version.outputs.version }}.nupkg
+          unzip -l "$pkg" | grep runtimes/
+          for f in win-x64/native/rustino_native.dll win-arm64/native/rustino_native.dll \
+                   linux-x64/native/librustino_native.so linux-arm64/native/librustino_native.so \
+                   osx-x64/native/librustino_native.dylib osx-arm64/native/librustino_native.dylib; do
+            unzip -l "$pkg" "runtimes/$f" > /dev/null || { echo "::error::runtimes/$f missing from $pkg"; exit 1; }
+          done
+
       - name: NuGet login (trusted publishing)
         id: nuget-login
         uses: NuGet/login@v1
