@@ -2,6 +2,12 @@
 
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
 
+  <!-- .NET 11 next to the .NET 10 of the root Directory.Build.props (preview until .NET 11 ships) -->
+  <PropertyGroup>
+    <TargetFramework />
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
+  </PropertyGroup>
+
   <!-- The NuGet packages: one version (bumped by the release) and the same metadata for all. -->
   <PropertyGroup>
     <Version>0.3.9</Version>
