@@ -1,7 +1,53 @@
+using Microsoft.Extensions.Logging;
+
 namespace Rustino.NET.Tests;
 
 public class SingleInstanceTests
 {
+    private sealed class ThrowingLogger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => throw new InvalidOperationException("logger failed");
+    }
+
+    [Fact]
+    public void AThrowingLoggerDoesNotStopTheDispatcher()
+    {
+        var appId = $"rustino.test.{Guid.NewGuid():N}";
+        using var secondHandled = new ManualResetEventSlim();
+        var primary = RustinoSingleInstance.Acquire(appId, new SingleInstanceOptions { Logger = new ThrowingLogger() });
+        var handled = 0;
+        primary.SecondInstanceStarted += (_, _) =>
+        {
+            if (Interlocked.Increment(ref handled) == 2)
+                secondHandled.Set();
+            // Reported to the logger, which throws in turn
+            throw new InvalidOperationException("handler failed");
+        };
+
+        try
+        {
+            foreach (var launch in new[] { "first", "second" })
+            {
+                using var secondary = RustinoSingleInstance.Acquire(appId, new SingleInstanceOptions
+                {
+                    Arguments = [launch],
+                    Timeout = TimeSpan.FromSeconds(5),
+                });
+                Assert.Equal(SingleInstanceStatus.Forwarded, secondary.Status);
+            }
+            Assert.True(secondHandled.Wait(TimeSpan.FromSeconds(5)), "The launch after the failing logger was not dispatched.");
+        }
+        finally
+        {
+            primary.Dispose();
+        }
+    }
+
     [Fact]
     public void HandlerCanDisposeItsOwnPrimary()
     {

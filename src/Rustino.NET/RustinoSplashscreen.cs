@@ -1,5 +1,8 @@
 namespace Rustino.NET;
 
+/// <summary>
+/// A borderless window showing an image while the app starts. Windows only: check <see cref="IsSupported"/>.
+/// </summary>
 public class RustinoSplashscreen : IDisposable
 {
     private readonly object _lock = new();
@@ -8,8 +11,17 @@ public class RustinoSplashscreen : IDisposable
     private bool _closed;
     private bool _disposed;
 
+    /// <summary>
+    /// Whether this platform can show a splashscreen: only Windows. macOS and Linux need the main thread for
+    /// windows, which the app's window takes once it runs.
+    /// </summary>
+    public static bool IsSupported => OperatingSystem.IsWindows();
+
+    /// <exception cref="PlatformNotSupportedException">Not on Windows (see <see cref="IsSupported"/>).</exception>
     public RustinoSplashscreen(string imagePath, int width = 400, int height = 300)
     {
+        ThrowIfNotSupported();
+
         if (string.IsNullOrWhiteSpace(imagePath))
         {
             throw new ArgumentException("Image path cannot be null or empty", nameof(imagePath));
@@ -39,8 +51,11 @@ public class RustinoSplashscreen : IDisposable
         }
     }
 
+    /// <exception cref="PlatformNotSupportedException">Not on Windows (see <see cref="IsSupported"/>).</exception>
     public static RustinoSplashscreen FromImage(Stream imageStream, int width = 400, int height = 300)
     {
+        ThrowIfNotSupported();
+
         if (imageStream == null)
         {
             throw new ArgumentNullException(nameof(imageStream));
@@ -82,6 +97,12 @@ public class RustinoSplashscreen : IDisposable
 
             throw;
         }
+    }
+
+    private static void ThrowIfNotSupported()
+    {
+        if (!IsSupported)
+            throw new PlatformNotSupportedException("The splashscreen is only supported on Windows: check RustinoSplashscreen.IsSupported.");
     }
 
     // Hides the splashscreen; Dispose() still frees it.

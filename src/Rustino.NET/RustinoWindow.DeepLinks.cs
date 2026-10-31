@@ -63,11 +63,10 @@ public partial class RustinoWindow
     private void DeliverDeepLinks(string[] urls)
     {
         var json = JsonSerializer.Serialize(urls, DeepLinkJsonContext.Default.StringArray);
-        lock (_lifecycleLock)
-        {
-            if (Volatile.Read(ref _disposed) != 0 || _nativeHandle == IntPtr.Zero)
-                return;
-            RustinoExtDllImports.rustino_deliver_urls(_nativeHandle, json);
-        }
+        // Not under the lock: the call may wait for the event loop
+        if (Volatile.Read(ref _disposed) != 0 || Native is not { } handle)
+            return;
+        try { RustinoExtDllImports.rustino_deliver_urls(handle, json); }
+        catch (ObjectDisposedException) { } // disposed meanwhile
     }
 }

@@ -64,18 +64,18 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _theme = theme;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_theme(_nativeHandle, (int)theme);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_theme(handle, (int)theme);
         return this;
     }
 
     /// <summary>Current theme of the window, Light or Dark (System before the window runs).</summary>
     public WindowTheme Theme =>
-        _nativeHandle == IntPtr.Zero ? WindowTheme.System : (WindowTheme)RustinoExtDllImports.rustino_get_theme(_nativeHandle);
+        Native is not { } handle ? WindowTheme.System : (WindowTheme)RustinoExtDllImports.rustino_get_theme(handle);
 
     /// <summary>Ratio between physical and logical pixels of the window's monitor.</summary>
     public double ScaleFactor =>
-        _nativeHandle == IntPtr.Zero ? 1.0 : RustinoExtDllImports.rustino_get_scale_factor(_nativeHandle);
+        Native is not { } handle ? 1.0 : RustinoExtDllImports.rustino_get_scale_factor(handle);
 
     /// <summary>
     /// Progress on the taskbar button (Windows), the Dock icon (macOS) or the dock icon (Linux, through the
@@ -87,8 +87,8 @@ public partial class RustinoWindow
         ThrowIfDisposed();
         if (progress is < 0 or > 100)
             throw new ArgumentOutOfRangeException(nameof(progress), "Progress must be between 0 and 100.");
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_progress_bar(_nativeHandle, (int)state, progress ?? -1);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_progress_bar(handle, (int)state, progress ?? -1);
         return this;
     }
 
@@ -101,8 +101,8 @@ public partial class RustinoWindow
     public RustinoWindow RequestUserAttention(UserAttentionType type = UserAttentionType.Informational)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_request_user_attention(_nativeHandle, (int)type);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_request_user_attention(handle, (int)type);
         return this;
     }
 
@@ -110,8 +110,8 @@ public partial class RustinoWindow
     public RustinoWindow CancelUserAttentionRequest()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_request_user_attention(_nativeHandle, 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_request_user_attention(handle, 0);
         return this;
     }
 
@@ -122,8 +122,8 @@ public partial class RustinoWindow
     public RustinoWindow Beep()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_beep(_nativeHandle);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_beep(handle);
         return this;
     }
 
@@ -135,8 +135,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _shadow = shadow;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_shadow(_nativeHandle, shadow ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_shadow(handle, shadow ? 1 : 0);
         return this;
     }
 
@@ -148,8 +148,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _skipTaskbar = skip;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_skip_taskbar(_nativeHandle, skip ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_skip_taskbar(handle, skip ? 1 : 0);
         return this;
     }
 
@@ -158,8 +158,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _contentProtection = enabled;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_content_protection(_nativeHandle, enabled ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_content_protection(handle, enabled ? 1 : 0);
         return this;
     }
 
@@ -168,8 +168,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _visibleOnAllWorkspaces = visible;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_visible_on_all_workspaces(_nativeHandle, visible ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_visible_on_all_workspaces(handle, visible ? 1 : 0);
         return this;
     }
 
@@ -178,8 +178,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _closable = closable;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_closable(_nativeHandle, closable ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_closable(handle, closable ? 1 : 0);
         return this;
     }
 
@@ -188,8 +188,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _minimizable = minimizable;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_minimizable(_nativeHandle, minimizable ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_minimizable(handle, minimizable ? 1 : 0);
         return this;
     }
 
@@ -198,8 +198,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _maximizable = maximizable;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_maximizable(_nativeHandle, maximizable ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_maximizable(handle, maximizable ? 1 : 0);
         return this;
     }
 
@@ -211,8 +211,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _alwaysOnBottom = onBottom;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_always_on_bottom(_nativeHandle, onBottom ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_always_on_bottom(handle, onBottom ? 1 : 0);
         return this;
     }
 
@@ -221,8 +221,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _ignoreCursorEvents = ignore;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_ignore_cursor_events(_nativeHandle, ignore ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_ignore_cursor_events(handle, ignore ? 1 : 0);
         return this;
     }
 
@@ -234,8 +234,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _macTitleBarStyle = style;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_mac_title_bar_style(_nativeHandle, (int)style);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_mac_title_bar_style(handle, (int)style);
         return this;
     }
 
@@ -253,8 +253,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _titleBarOverlay = overlay;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_title_bar_overlay(_nativeHandle, overlay ? 1 : 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_title_bar_overlay(handle, overlay ? 1 : 0);
         return this;
     }
 
@@ -269,8 +269,8 @@ public partial class RustinoWindow
         if (a == 0)
             throw new ArgumentOutOfRangeException(nameof(a), "Use ResetTitleBarOverlayColor to go back to the page's color.");
         _titleBarOverlayColor = (r, g, b, a);
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_title_bar_overlay_color(_nativeHandle, r, g, b, a);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_title_bar_overlay_color(handle, r, g, b, a);
         return this;
     }
 
@@ -279,8 +279,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _titleBarOverlayColor = null;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_title_bar_overlay_color(_nativeHandle, 0, 0, 0, 0);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_title_bar_overlay_color(handle, 0, 0, 0, 0);
         return this;
     }
 
@@ -301,8 +301,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _trafficLightPosition = (x, y);
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_traffic_light_position(_nativeHandle, x, y);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_traffic_light_position(handle, x, y);
         return this;
     }
 
@@ -314,8 +314,8 @@ public partial class RustinoWindow
     {
         ThrowIfDisposed();
         _desktopFileName = fileName;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_set_desktop_file_name(_nativeHandle, fileName);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_desktop_file_name(handle, fileName);
         return this;
     }
 
@@ -326,8 +326,8 @@ public partial class RustinoWindow
     public RustinoWindow DragWindow()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_drag_window(_nativeHandle);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_drag_window(handle);
         return this;
     }
 
@@ -335,65 +335,59 @@ public partial class RustinoWindow
     public RustinoWindow DragResizeWindow(ResizeDirection direction)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoExtDllImports.rustino_drag_resize_window(_nativeHandle, (int)direction);
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_drag_resize_window(handle, (int)direction);
         return this;
     }
 
     // Called by EnsureNative: settings made before the native window existed
-    private void ApplyExtConfiguration()
+    private void ApplyExtConfiguration(RustinoWindowHandle handle)
     {
         if (_theme != WindowTheme.System)
-            RustinoExtDllImports.rustino_set_theme(_nativeHandle, (int)_theme);
+            RustinoExtDllImports.rustino_set_theme(handle, (int)_theme);
         if (_shadow is { } shadow)
-            RustinoExtDllImports.rustino_set_shadow(_nativeHandle, shadow ? 1 : 0);
+            RustinoExtDllImports.rustino_set_shadow(handle, shadow ? 1 : 0);
         if (_skipTaskbar)
-            RustinoExtDllImports.rustino_set_skip_taskbar(_nativeHandle, 1);
+            RustinoExtDllImports.rustino_set_skip_taskbar(handle, 1);
         if (_contentProtection)
-            RustinoExtDllImports.rustino_set_content_protection(_nativeHandle, 1);
+            RustinoExtDllImports.rustino_set_content_protection(handle, 1);
         if (_visibleOnAllWorkspaces)
-            RustinoExtDllImports.rustino_set_visible_on_all_workspaces(_nativeHandle, 1);
+            RustinoExtDllImports.rustino_set_visible_on_all_workspaces(handle, 1);
         if (!_closable)
-            RustinoExtDllImports.rustino_set_closable(_nativeHandle, 0);
+            RustinoExtDllImports.rustino_set_closable(handle, 0);
         if (!_minimizable)
-            RustinoExtDllImports.rustino_set_minimizable(_nativeHandle, 0);
+            RustinoExtDllImports.rustino_set_minimizable(handle, 0);
         if (!_maximizable)
-            RustinoExtDllImports.rustino_set_maximizable(_nativeHandle, 0);
+            RustinoExtDllImports.rustino_set_maximizable(handle, 0);
         if (_alwaysOnBottom)
-            RustinoExtDllImports.rustino_set_always_on_bottom(_nativeHandle, 1);
+            RustinoExtDllImports.rustino_set_always_on_bottom(handle, 1);
         if (_ignoreCursorEvents)
-            RustinoExtDllImports.rustino_set_ignore_cursor_events(_nativeHandle, 1);
+            RustinoExtDllImports.rustino_set_ignore_cursor_events(handle, 1);
         if (_macTitleBarStyle != MacTitleBarStyle.Default)
-            RustinoExtDllImports.rustino_set_mac_title_bar_style(_nativeHandle, (int)_macTitleBarStyle);
+            RustinoExtDllImports.rustino_set_mac_title_bar_style(handle, (int)_macTitleBarStyle);
         if (_titleBarOverlay)
-            RustinoExtDllImports.rustino_set_title_bar_overlay(_nativeHandle, 1);
+            RustinoExtDllImports.rustino_set_title_bar_overlay(handle, 1);
         if (_titleBarOverlayColor is { } color)
-            RustinoExtDllImports.rustino_set_title_bar_overlay_color(_nativeHandle, color.R, color.G, color.B, color.A);
+            RustinoExtDllImports.rustino_set_title_bar_overlay_color(handle, color.R, color.G, color.B, color.A);
         if (_trafficLightPosition is { } lights)
-            RustinoExtDllImports.rustino_set_traffic_light_position(_nativeHandle, lights.X, lights.Y);
+            RustinoExtDllImports.rustino_set_traffic_light_position(handle, lights.X, lights.Y);
         if (_desktopFileName != null)
-            RustinoExtDllImports.rustino_set_desktop_file_name(_nativeHandle, _desktopFileName);
+            RustinoExtDllImports.rustino_set_desktop_file_name(handle, _desktopFileName);
         if (!_dragRegions)
-            RustinoExtDllImports.rustino_set_drag_regions_enabled(_nativeHandle, 0);
+            RustinoExtDllImports.rustino_set_drag_regions_enabled(handle, 0);
     }
 
     // Called by RegisterCallbacks
-    private void RegisterExtCallbacks()
+    private static void RegisterExtCallbacks(RustinoWindowHandle handle)
     {
-        RustinoExtDllImports.rustino_set_theme_changed_handler(_nativeHandle, ThemeChangedCb);
-        RustinoExtDllImports.rustino_set_scale_factor_changed_handler(_nativeHandle, ScaleFactorChangedCb);
-        RustinoExtDllImports.rustino_set_urls_opened_handler(_nativeHandle, UrlsOpenedCb);
-        RustinoExtDllImports.rustino_set_reopen_handler(_nativeHandle, ReopenCb);
+        RustinoExtDllImports.rustino_set_theme_changed_handler(handle, ThemeChangedCb);
+        RustinoExtDllImports.rustino_set_scale_factor_changed_handler(handle, ScaleFactorChangedCb);
+        RustinoExtDllImports.rustino_set_urls_opened_handler(handle, UrlsOpenedCb);
+        RustinoExtDllImports.rustino_set_reopen_handler(handle, ReopenCb);
     }
 
-    // Called by CompleteAllObservables
-    private static void CompleteExtObservables(RustinoWindow w)
-    {
-        w._themeChangedObs.Complete();
-        w._scaleFactorChangedObs.Complete();
-        w._urlsOpenedObs.Complete();
-        w._reopenedObs.Complete();
-    }
+    // Completed by CompleteAllObservables
+    private ICompletable[] ExtObservables => [_themeChangedObs, _scaleFactorChangedObs, _urlsOpenedObs, _reopenedObs];
 
     private static void OnThemeChangedNative(IntPtr ctx, int theme) => GuardNativeCallback(ctx, nameof(OnThemeChangedNative), w =>
     {

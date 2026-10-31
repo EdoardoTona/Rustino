@@ -267,7 +267,7 @@ public sealed class RustinoSingleInstance : IDisposable
 
     private void ReportHandlerException(Exception exception, string handlerName)
     {
-        _options.Logger?.LogError(exception, "Single-instance handler {HandlerName} failed.", handlerName);
+        _options.Logger.TryLog(l => l.LogError(exception, "Single-instance handler {HandlerName} failed.", handlerName));
         EventHandler<SingleInstanceExceptionEventArgs>? handlers;
         lock (_gate) handlers = _unhandledException;
         if (handlers is null) return;
@@ -277,7 +277,7 @@ public sealed class RustinoSingleInstance : IDisposable
             try { handler(this, args); }
             catch (Exception reportException)
             {
-                _options.Logger?.LogError(reportException, "Single-instance exception reporting handler failed.");
+                _options.Logger.TryLog(l => l.LogError(reportException, "Single-instance exception reporting handler failed."));
             }
         }
     }
@@ -311,7 +311,7 @@ public sealed class RustinoSingleInstance : IDisposable
                 Thread.Sleep(Min(TimeSpan.FromMilliseconds(50), delay));
         } while (DateTime.UtcNow < deadline);
 
-        logger?.LogWarning("No single-instance primary acknowledged app id {AppId} within {Timeout}.", endpoint.DisplayId, timeout);
+        logger.TryLog(l => l.LogWarning("No single-instance primary acknowledged app id {AppId} within {Timeout}.", endpoint.DisplayId, timeout));
         return ForwardResult.Unavailable;
     }
 
@@ -325,5 +325,16 @@ public sealed class RustinoSingleInstance : IDisposable
 }
 
 internal enum ForwardResult { Delivered, Rejected, Unavailable }
+
+internal static class SingleInstanceLogging
+{
+    // A logger that throws must not stop the dispatcher or the listener
+    public static void TryLog(this ILogger? logger, Action<ILogger> log)
+    {
+        if (logger is null) return;
+        try { log(logger); }
+        catch (Exception) { }
+    }
+}
 
 internal sealed record SingleInstanceRequest(string[] Args, string WorkingDirectory, int ProcessId, string? ActivationToken);

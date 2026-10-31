@@ -22,3 +22,7 @@ Thumbs.db
 
 # CI-staged native binaries
 src/Rustino.NET/runtimes/
+
+
+*.env
+docs/

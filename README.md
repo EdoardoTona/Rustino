@@ -6,6 +6,8 @@ Inspired by [Photino.NET](https://tryphotino.io).
 
 Rustino replaces Photino's C++ native layer with Rust, using [wry](https://github.com/tauri-apps/wry) for the webview and [tao](https://github.com/tauri-apps/tao) for window management — the same libraries that power [Tauri](https://tauri.app).
 
+> **About this fork.** This project started as a fork of [Ivy-Interactive/Rustino](https://github.com/Ivy-Interactive/Rustino) and has since gone its own way: it is developed independently, is not kept in sync with the original repository, and its API and behavior differ from it (multiple windows, Blazor Hybrid, single instance and deep links, local files, and more). It is published under its own package names (see [Installation](#installation)); report issues and send pull requests here.
+
 ## Architecture
 
 ```
@@ -20,7 +22,7 @@ Your .NET App
 
 ## Installation
 
-This fork of [Ivy-Interactive/Rustino](https://github.com/Ivy-Interactive/Rustino) is published on NuGet as:
+Rustino is published on NuGet as:
 
 | Package | Contents |
 |---|---|
@@ -112,7 +114,7 @@ For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid
 | `SetUserDataFolder(string)` | Set webview data folder path |
 | `AddInitScript(string)` | Add JavaScript to run before page loads |
 | `RegisterCustomSchemeHandler(string, handler)` | Serve `scheme://` requests from .NET (see [Custom Schemes](#custom-schemes)) |
-| `Load(Uri)` / `Load(string)` | Navigate to a URL or local file |
+| `Load(Uri)` / `Load(string)` | Navigate to a URL or local file (see [Local files](#local-files)) |
 | `LogVerbosity` | Set log verbosity (0 = silent) |
 | `SetLogger(ILogger)` | Route native and callback logs to a `Microsoft.Extensions.Logging` logger |
 | `SetApplicationId(string)` | Windows: the process AppUserModelID (taskbar grouping, pinning; pair it with [`RegisterNotificationAppId`](#windows-register-your-appid)) |
@@ -236,16 +238,26 @@ hosts, paths, OAuth state, or tokens. Treat every URL as untrusted input.
 
 ### Splashscreen
 
-A borderless window showing an image while the app starts; it closes on `Close()` or `Dispose()`:
+A borderless window showing an image while the app starts; it closes on `Close()` or `Dispose()`. Windows only:
+macOS and Linux create windows on the main thread, which the app's window takes once it runs, so there the
+constructors throw `PlatformNotSupportedException`. Check `RustinoSplashscreen.IsSupported`:
 
 ```csharp
-using (var splash = new RustinoSplashscreen("splash.png", width: 400, height: 400))
+using (var splash = RustinoSplashscreen.IsSupported ? new RustinoSplashscreen("splash.png", width: 400, height: 400) : null)
 {
     LoadSettings(); // slow startup work
 }
 
 // From an embedded resource
 using var splash = RustinoSplashscreen.FromImage(stream, 400, 300);
+```
+
+### Local files
+
+`Load` takes a path or a `file:` URL. A relative path is resolved against the current directory, then against the app's directory. The page is served from `rustino-file://localhost/<full path>` rather than `file://`: webviews don't deliver `window.ipc` messages from `file:` pages, and the scheme gives the page an origin. The files in the folder of the loaded file and its subfolders can be referenced with relative URLs (`css/app.css`); nothing outside the folders of loaded files is served. `PageLoaded` and `Navigating` report the page's URL: `rustino-file://localhost/...`, or `http://rustino-file.localhost/...` on Windows, where WebView2 serves custom schemes from `http://<scheme>.localhost/`. `rustino-file` can't be registered with `RegisterCustomSchemeHandler`.
+
+```csharp
+window.Load("wwwroot/index.html");   // rustino-file://localhost/<app folder>/wwwroot/index.html
 ```
 
 ### Custom Schemes
@@ -659,7 +671,7 @@ Without `SetContextMenuEnabled(false)` right click opens the browser's menu. On 
 
 **File drop.** With `SetFileDropEnabled(true)`, `FileDrop` reports `Enter` (with the paths), `Over`, `Drop` (with the paths) and `Leave`; positions are in logical (CSS) pixels from the top-left corner of the page. The page doesn't get the dropped files, and the webview doesn't navigate to them. Drags that carry no files (e.g. elements dragged within the page) stay with the page on macOS and Linux; on Windows the webview stops receiving drops altogether, so the page's HTML5 drag and drop doesn't work while file drop is on (a WebView2 limitation of wry).
 
-**Downloads.** `DownloadStarting` runs before the file is written: `SuggestedPath` is where a browser would save it (the Downloads folder, with a name that doesn't replace an existing file). Leave `DestinationPath` null to let the user choose in the save dialog (modal for the window), set it to save there without asking (an existing file is replaced), or set `Cancel`. Don't show dialogs from this handler. The file is downloaded to a temporary folder and moved to its destination when complete, so the save dialog can stay open while it downloads. `DownloadCompleted` reports every download that `DownloadStarting` let through: `Path` is null when the download failed or the user canceled the dialog. Without these events WKWebView wouldn't download at all; WebView2 no longer shows its download bar, nor asks before a page downloads more than one file. WKWebView and WebKitGTK start only the last of several downloads that the same script starts (e.g. consecutive `click()` calls on `<a download>` links): let a moment pass between them, e.g. with `setTimeout`.
+**Downloads.** `DownloadStarting` runs before the file is written: `SuggestedPath` is where a browser would save it (the Downloads folder, with a name that doesn't replace an existing file). Leave `DestinationPath` null to let the user choose in the save dialog (modal for the window), set it to save there without asking (an existing file is replaced), or set `Cancel`. Don't show dialogs from this handler. The file is downloaded to a temporary folder and moved to its destination when complete, so the save dialog can stay open while it downloads. When it can't be moved there (e.g. the disk is full), a file already at the destination is left as it was, and the window's logger reports where the download is kept until the app exits. `DownloadCompleted` reports every download that `DownloadStarting` let through: `Path` is null when the download failed or the user canceled the dialog. Without these events WKWebView wouldn't download at all; WebView2 no longer shows its download bar, nor asks before a page downloads more than one file. WKWebView and WebKitGTK start only the last of several downloads that the same script starts (e.g. consecutive `click()` calls on `<a download>` links): let a moment pass between them, e.g. with `setTimeout`.
 
 **Cookies.** `GetCookies()` returns all the cookies, `GetCookies(url)` those sent to that URL; `SetCookie` adds or replaces a cookie (same name, domain and path), `DeleteCookie` removes it. `RustinoCookie` has `Name`, `Value`, `Domain`, `Path`, `Expires`, `Secure`, `HttpOnly` and `SameSite` (`Strict`, `Lax`, `None`):
 
@@ -782,6 +794,10 @@ var app = builder.Build();
 app.MainWindow.SetTitle("My Blazor App");     // the underlying RustinoWindow
 app.Run();
 ```
+
+When the main window closes, `Run()` disposes the app: the components and scoped services of each window (their
+`Dispose`/`DisposeAsync` run), then the app's services. An app built but never run is disposed with
+`Dispose()`/`DisposeAsync()`.
 
 Use the `Microsoft.NET.Sdk.Razor` SDK and put a host page in `wwwroot/index.html`:
 

@@ -17,7 +17,7 @@ use wry::WebViewBuilder;
 
 use crate::commands::RustinoCommand;
 use crate::state::SharedState;
-use crate::window::{CommandProxy, LoopEvent};
+use crate::window::{CommandProxy, Wake};
 
 /// Messages of the drag region script, which the IPC handler keeps from the host.
 const IPC_PREFIX: &str = "__rustino:";
@@ -512,7 +512,7 @@ impl WindowExtRuntime {
     pub fn handle_event<'a>(
         &mut self,
         event: Event<'a, RustinoCommand>,
-        target: &EventLoopWindowTarget<LoopEvent>,
+        target: &EventLoopWindowTarget<Wake>,
         window: &Window,
         webview: &wry::WebView,
     ) -> Option<Event<'a, RustinoCommand>> {
@@ -593,7 +593,7 @@ impl WindowExtRuntime {
     fn dispatch(
         &mut self,
         command: WindowCommand,
-        target: &EventLoopWindowTarget<LoopEvent>,
+        target: &EventLoopWindowTarget<Wake>,
         window: &Window,
         #[allow(unused_variables)] webview: &wry::WebView,
     ) {
@@ -913,7 +913,7 @@ fn resize_border(#[allow(unused_variables)] window: &Window) -> u32 {
 }
 
 #[allow(unused_variables)]
-fn set_skip_taskbar(window: &Window, target: &EventLoopWindowTarget<LoopEvent>, skip: bool) {
+fn set_skip_taskbar(window: &Window, target: &EventLoopWindowTarget<Wake>, skip: bool) {
     #[cfg(target_os = "windows")]
     {
         use tao::platform::windows::WindowExtWindows;

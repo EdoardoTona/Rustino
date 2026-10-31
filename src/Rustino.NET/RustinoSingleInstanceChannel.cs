@@ -169,7 +169,7 @@ internal sealed class SingleInstanceServer(
             catch (ObjectDisposedException) when (_stop.IsCancellationRequested) { break; }
             catch (Exception exception)
             {
-                logger?.LogWarning(exception, "Single-instance listener failed while waiting for a connection.");
+                logger.TryLog(l => l.LogWarning(exception, "Single-instance listener failed while waiting for a connection."));
                 listener.Dispose();
                 listener = null;
                 continue;
@@ -185,7 +185,7 @@ internal sealed class SingleInstanceServer(
             catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
             catch (Exception exception)
             {
-                logger?.LogWarning(exception, "Single-instance request handling failed.");
+                logger.TryLog(l => l.LogWarning(exception, "Single-instance request handling failed."));
             }
             finally
             {
@@ -203,7 +203,7 @@ internal sealed class SingleInstanceServer(
         try { return CreatePipe(first); }
         catch (Exception exception)
         {
-            logger?.LogWarning(exception, "Could not create the single-instance listener.");
+            logger.TryLog(l => l.LogWarning(exception, "Could not create the single-instance listener."));
             return null;
         }
     }

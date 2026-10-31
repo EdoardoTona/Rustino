@@ -32,13 +32,9 @@ public class MultiWindowTests
         public void Dispose() => Window.Dispose();
     }
 
-    [NativeLibraryFact]
+    [WindowsNativeLibraryFact]
     public async Task WindowsJoinTheEventLoopOfTheFirstAndCloseWithIt()
     {
-        // On macOS the first window needs the main thread, which the test runner keeps
-        if (!OperatingSystem.IsWindows())
-            return;
-
         using TestWindow main = new(), second = new(), third = new();
         main.Start();
         var loopThread = await main.Ready.Task.WaitAsync(Timeout);

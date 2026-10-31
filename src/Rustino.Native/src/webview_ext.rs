@@ -16,6 +16,7 @@ use wry::cookie::{Cookie, SameSite};
 use wry::{DragDropEvent, WebViewBuilder};
 
 use crate::commands::RustinoCommand;
+use crate::config::Logger;
 use crate::dialogs::{self, DialogParams, FileDialogKind};
 use crate::invoke::Task;
 use crate::window::CommandProxy;
@@ -129,11 +130,13 @@ impl WebViewExt {
         context: *mut c_void,
         state: &Arc<SharedState>,
         proxy: CommandProxy,
+        logger: Logger,
     ) -> WebViewBuilder<'a> {
         let options = &self.options;
         let host = Host {
             context: context as usize,
             callbacks: self.callbacks,
+            logger,
         };
 
         #[cfg(target_os = "windows")]
@@ -275,6 +278,7 @@ pub fn make_inspectable(webview: &wry::WebView) {
 struct Host {
     context: usize,
     callbacks: WebViewExtCallbacks,
+    logger: Logger,
 }
 
 impl Host {
@@ -494,15 +498,32 @@ fn ask_destination(
 fn complete(download: Download, host: Host, proxy: CommandProxy) {
     // Across volumes the move copies the file: not on the event loop thread
     std::thread::spawn(move || {
+        let mut error = None;
         let path = match (&download.destination, download.finished) {
-            (Destination::Chosen(destination), Some(true)) => {
-                move_file(&download.temp, destination).ok().map(|_| destination.clone())
-            }
+            (Destination::Chosen(destination), Some(true)) => match move_file(&download.temp, destination) {
+                Ok(()) => Some(destination.clone()),
+                Err(e) => {
+                    // The downloaded file stays in its temporary folder, which is removed once the
+                    // app has exited and a Rustino app starts again
+                    error = Some(format!(
+                        "[rustino] The download of {} could not be saved to {}: {e}. The file is kept at {} until the app exits.",
+                        download.url,
+                        destination.display(),
+                        download.temp.display()
+                    ));
+                    None
+                }
+            },
             _ => None,
         };
-        remove_temp(&download.temp);
+        if error.is_none() {
+            remove_temp(&download.temp);
+        }
         let url = download.url;
         let _ = proxy.send_event(RustinoCommand::Invoke(Task::new(move |_, _| {
+            if let Some(message) = &error {
+                host.logger.error(message);
+            }
             host.download_completed(&url, path.as_deref())
         })));
     });
@@ -637,7 +658,38 @@ fn remove_temp(temp: &Path) {
 
 /// Replaces an existing file: the save dialog already asked.
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::rename(from, to).or_else(|_| std::fs::copy(from, to).map(|_| ()))
+    std::fs::rename(from, to).or_else(|_| copy_then_replace(from, to))
+}
+
+/// Moves a file to another volume. It's copied next to the destination, then renamed over it: a
+/// copy that fails (e.g. the disk is full) leaves an existing file as it was.
+fn copy_then_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    let folder = match to.parent() {
+        Some(folder) if !folder.as_os_str().is_empty() => folder,
+        _ => Path::new("."),
+    };
+    let name = to.file_name().ok_or(std::io::ErrorKind::InvalidInput)?.to_string_lossy();
+    let (partial, mut file) = (0..100)
+        .find_map(|attempt| {
+            let partial = folder.join(format!(".{name}.{}-{attempt}.part", std::process::id()));
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&partial) {
+                Ok(file) => Some(Ok((partial, file))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .unwrap_or_else(|| Err(std::io::ErrorKind::AlreadyExists.into()))?;
+    let copied = std::fs::File::open(from)
+        .and_then(|mut source| std::io::copy(&mut source, &mut file))
+        .and_then(|_| file.sync_all());
+    drop(file);
+    let replaced = copied.and_then(|()| std::fs::rename(&partial, to));
+    if replaced.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    } else {
+        let _ = std::fs::remove_file(from);
+    }
+    replaced
 }
 
 // ---------------------------------------------------------------------------
@@ -843,6 +895,33 @@ mod tests {
         move_file(&from, &to).unwrap();
         assert_eq!(std::fs::read_to_string(&to).unwrap(), "new");
         assert!(!from.exists());
+        remove_temp(&from);
+        remove_temp(&to);
+    }
+
+    #[test]
+    fn copy_then_replace_replaces_the_destination() {
+        let from = temp_download_path(Path::new("from.txt")).unwrap();
+        let to = temp_download_path(Path::new("to.txt")).unwrap();
+        std::fs::write(&from, "new").unwrap();
+        std::fs::write(&to, "old").unwrap();
+        copy_then_replace(&from, &to).unwrap();
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "new");
+        assert!(!from.exists());
+        // Only the destination is left in its folder: no partial copy
+        assert_eq!(std::fs::read_dir(to.parent().unwrap()).unwrap().count(), 1);
+        remove_temp(&from);
+        remove_temp(&to);
+    }
+
+    #[test]
+    fn a_failed_copy_keeps_the_destination_and_the_download() {
+        let from = temp_download_path(Path::new("missing.txt")).unwrap();
+        let to = temp_download_path(Path::new("to.txt")).unwrap();
+        std::fs::write(&to, "old").unwrap();
+        assert!(copy_then_replace(&from, &to).is_err());
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "old");
+        assert_eq!(std::fs::read_dir(to.parent().unwrap()).unwrap().count(), 1);
         remove_temp(&from);
         remove_temp(&to);
     }

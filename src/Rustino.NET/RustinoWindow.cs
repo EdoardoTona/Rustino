@@ -8,15 +8,14 @@ namespace Rustino.NET;
 
 public partial class RustinoWindow : IDisposable
 {
-    private IntPtr _nativeHandle;
+    // Set once, under _lifecycleLock, when the native window is created; Dispose disposes it but
+    // never resets it
+    private RustinoWindowHandle? _nativeHandle;
     private int _disposed;
-    private int _waitForCloseActive;
     private bool _runStarted;
     private readonly object _lifecycleLock = new();
     private ILogger? _logger;
     private int _logVerbosity;
-    private GCHandle _logCallbackHandle;
-    private int _logCallbackReleasePending;
 
     // Original configuration fields
     private string _title = "Rustino Window";
@@ -30,6 +29,9 @@ public partial class RustinoWindow : IDisposable
     private bool _ignoreCertErrors;
     private bool _webSecurityEnabled = true;
     private string? _iconFile;
+    // Icons that SetIcon and SetTrayIcon wrote from a stream
+    private string? _iconTempFile;
+    private string? _trayIconTempFile;
     private bool _center;
 
     // New configuration fields
@@ -80,7 +82,7 @@ public partial class RustinoWindow : IDisposable
             lock (_lifecycleLock)
             {
                 ThrowIfDisposed();
-                if (_nativeHandle != IntPtr.Zero)
+                if (_nativeHandle != null)
                     throw CreationSettingStarted(nameof(LogVerbosity));
                 _logVerbosity = value;
             }
@@ -188,6 +190,7 @@ public partial class RustinoWindow : IDisposable
     public RustinoWindow()
     {
         NativeLibraryResolver.EnsureRegistered();
+        _customSchemes[LocalFileScheme] = ServeLocalFile;
     }
 
     // --- Logger configuration ---
@@ -215,8 +218,8 @@ public partial class RustinoWindow : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         _width = width;
         _height = height;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_size(_nativeHandle, width, height);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_size(handle, width, height);
         return this;
     }
 
@@ -224,8 +227,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _title = title;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_title(_nativeHandle, title);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_title(handle, title);
         return this;
     }
 
@@ -233,8 +236,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _resizable = resizable;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_resizable(_nativeHandle, resizable ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_resizable(handle, resizable ? 1 : 0);
         return this;
     }
 
@@ -242,8 +245,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _topmost = topMost;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_topmost(_nativeHandle, topMost ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_topmost(handle, topMost ? 1 : 0);
         return this;
     }
 
@@ -275,61 +278,106 @@ public partial class RustinoWindow : IDisposable
         return this;
     }
 
-    public RustinoWindow SetIconFile(string path)
-    {
-        ThrowIfDisposed();
-        _iconFile = path;
-        if (_nativeHandle != IntPtr.Zero)
-        {
-            RustinoDllImports.rustino_set_icon_file(_nativeHandle, path);
-            if (OperatingSystem.IsMacOS())
-            {
-                SetMacDockIcon(path);
-            }
-        }
-        return this;
-    }
+    public RustinoWindow SetIconFile(string path) => SetIconFile(path, tempFile: false);
 
+    // Written to a temporary file, deleted when the icon is replaced and by Dispose
     public RustinoWindow SetIcon(Stream icon)
     {
         ThrowIfDisposed();
-        var tempPath = Path.Combine(Path.GetTempPath(), $"rustino_icon_{Guid.NewGuid():N}.png");
-        using (var fs = File.Create(tempPath))
-            icon.CopyTo(fs);
-        return SetIconFile(tempPath);
+        return SetIconFile(WriteTempFile(icon, "rustino_icon"), tempFile: true);
+    }
+
+    private RustinoWindow SetIconFile(string path, bool tempFile)
+    {
+        try
+        {
+            ThrowIfDisposed();
+            _iconFile = path;
+            if (Native is { } handle)
+            {
+                RustinoDllImports.rustino_set_icon_file(handle, path);
+                if (OperatingSystem.IsMacOS())
+                {
+                    SetMacDockIcon(path);
+                }
+            }
+        }
+        catch
+        {
+            if (tempFile) DeleteFile(path);
+            throw;
+        }
+        // The macOS Dock icon is loaded again from _iconFile at every page load
+        DeleteFile(Interlocked.Exchange(ref _iconTempFile, tempFile ? path : null));
+        return this;
     }
 
     public RustinoWindow Center()
     {
         ThrowIfDisposed();
         _center = true;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_center(_nativeHandle);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_center(handle);
         return this;
     }
 
+    /// <summary>
+    /// Navigates to <paramref name="uri"/>. <c>file:</c> URIs and relative URIs are local files, as with
+    /// <see cref="Load(string)"/>.
+    /// </summary>
     public RustinoWindow Load(Uri uri)
     {
+        ArgumentNullException.ThrowIfNull(uri);
         ThrowIfDisposed();
-        EnsureNative();
-        RustinoDllImports.rustino_navigate_to_url(_nativeHandle, uri.AbsoluteUri);
+        var url = !uri.IsAbsoluteUri ? LocalFileUrl(ResolveFile(uri.OriginalString))
+            : uri.IsFile && !uri.IsUnc ? LocalFileUrl(Path.GetFullPath(uri.LocalPath), uri.Query + uri.Fragment)
+            : uri.AbsoluteUri;
+        RustinoDllImports.rustino_navigate_to_url(EnsureNative(), url);
         return this;
     }
 
+    /// <summary>
+    /// Navigates to an absolute URL (<c>https:</c>, a custom scheme, ...), to the HTML of a
+    /// <c>data:text/html,</c> URL, or to a local file (a path or a <c>file:</c> URL). A relative path is
+    /// resolved against the current directory, or against the app's directory when the file isn't in the
+    /// current directory. Local files are served from <c>rustino-file://localhost/&lt;full path&gt;</c>, with
+    /// the other files of their folder and its subfolders: <c>file:</c> pages can't send messages to the host.
+    /// </summary>
     public RustinoWindow Load(string pathOrUrl)
     {
+        ArgumentException.ThrowIfNullOrEmpty(pathOrUrl);
         ThrowIfDisposed();
-        EnsureNative();
         if (pathOrUrl.StartsWith("data:text/html,", StringComparison.OrdinalIgnoreCase))
         {
             var html = Uri.UnescapeDataString(pathOrUrl["data:text/html,".Length..]);
-            RustinoDllImports.rustino_navigate_to_string(_nativeHandle, html);
+            RustinoDllImports.rustino_navigate_to_string(EnsureNative(), html);
         }
         else
         {
-            RustinoDllImports.rustino_navigate_to_url(_nativeHandle, pathOrUrl);
+            RustinoDllImports.rustino_navigate_to_url(EnsureNative(), ToUrl(pathOrUrl));
         }
         return this;
+    }
+
+    // Absolute URLs stay as they are; paths and file: URLs are local files. Absolute paths
+    // (C:\app\index.html, /app/index.html) parse as file URIs too.
+    internal string ToUrl(string pathOrUrl)
+    {
+        if (!Uri.TryCreate(pathOrUrl, UriKind.Absolute, out var uri) || (uri.IsFile && Path.IsPathRooted(pathOrUrl)))
+            return LocalFileUrl(ResolveFile(pathOrUrl));
+        return uri.IsFile && !uri.IsUnc ? LocalFileUrl(Path.GetFullPath(uri.LocalPath), uri.Query + uri.Fragment) : pathOrUrl;
+    }
+
+    private static string ResolveFile(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath) && !Path.IsPathRooted(path))
+        {
+            var appPath = Path.GetFullPath(path, AppContext.BaseDirectory);
+            if (File.Exists(appPath))
+                fullPath = appPath;
+        }
+        return fullPath;
     }
 
     // --- New builder methods (Phase 3-5) ---
@@ -345,8 +393,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _decorations = !chromeless;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_decorations(_nativeHandle, _decorations ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_decorations(handle, _decorations ? 1 : 0);
         return this;
     }
 
@@ -354,8 +402,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _position = (x, y);
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_position(_nativeHandle, x, y);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_position(handle, x, y);
         return this;
     }
 
@@ -365,8 +413,8 @@ public partial class RustinoWindow : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         _minSize = (width, height);
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_min_size(_nativeHandle, width, height);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_min_size(handle, width, height);
         return this;
     }
 
@@ -376,8 +424,8 @@ public partial class RustinoWindow : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         _maxSize = (width, height);
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_max_size(_nativeHandle, width, height);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_max_size(handle, width, height);
         return this;
     }
 
@@ -385,8 +433,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _backgroundColor = (r, g, b, a);
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_background_color(_nativeHandle, r, g, b, a);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_background_color(handle, r, g, b, a);
         return this;
     }
 
@@ -423,7 +471,7 @@ public partial class RustinoWindow : IDisposable
             ThrowIfDisposed();
             if (_runStarted)
                 throw CreationSettingStarted(nameof(AddInitScript));
-            if (_nativeHandle != IntPtr.Zero && RustinoDllImports.rustino_add_init_script(_nativeHandle, script) == 0)
+            if (Native is { } handle && RustinoDllImports.rustino_add_init_script(handle, script) == 0)
                 throw CreationSettingStarted(nameof(AddInitScript));
             _initScripts.Add(script);
         }
@@ -437,14 +485,16 @@ public partial class RustinoWindow : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(scheme);
         ArgumentNullException.ThrowIfNull(handler);
         scheme = scheme.ToLowerInvariant();
+        if (scheme == LocalFileScheme)
+            throw new ArgumentException($"The {LocalFileScheme} scheme serves the local files passed to Load.", nameof(scheme));
         lock (_lifecycleLock)
         {
             ThrowIfDisposed();
             if (_runStarted)
                 throw CreationSettingStarted(nameof(RegisterCustomSchemeHandler));
-            if (_nativeHandle != IntPtr.Zero
+            if (Native is { } handle
                 && !_customSchemes.ContainsKey(scheme)
-                && RustinoDllImports.rustino_add_custom_scheme(_nativeHandle, scheme) == 0)
+                && RustinoDllImports.rustino_add_custom_scheme(handle, scheme) == 0)
                 throw CreationSettingStarted(nameof(RegisterCustomSchemeHandler));
             _customSchemes[scheme] = handler;
         }
@@ -455,8 +505,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _aboutName = name;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_about_name(_nativeHandle, name);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_about_name(handle, name);
         return this;
     }
 
@@ -464,8 +514,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _aboutVersion = version;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_about_version(_nativeHandle, version);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_about_version(handle, version);
         return this;
     }
 
@@ -473,8 +523,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _aboutCopyright = copyright;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_about_copyright(_nativeHandle, copyright);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_about_copyright(handle, copyright);
         return this;
     }
 
@@ -482,8 +532,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _aboutWebsite = website;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_about_website(_nativeHandle, website);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_about_website(handle, website);
         return this;
     }
 
@@ -491,8 +541,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _aboutLicense = license;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_about_license(_nativeHandle, license);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_about_license(handle, license);
         return this;
     }
 
@@ -500,10 +550,10 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _aboutAuthors.Add(author);
-        if (_nativeHandle != IntPtr.Zero)
+        if (Native is { } handle)
         {
             var authorsStr = string.Join("\n", _aboutAuthors);
-            RustinoDllImports.rustino_set_about_authors(_nativeHandle, authorsStr);
+            RustinoDllImports.rustino_set_about_authors(handle, authorsStr);
         }
         return this;
     }
@@ -512,8 +562,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _aboutComments = comments;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_about_comments(_nativeHandle, comments);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_about_comments(handle, comments);
         return this;
     }
 
@@ -523,16 +573,16 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _maximized = maximized;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_maximized(_nativeHandle, maximized ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_maximized(handle, maximized ? 1 : 0);
         return this;
     }
 
     public RustinoWindow Minimize()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_minimized(_nativeHandle, 1);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_minimized(handle, 1);
         return this;
     }
 
@@ -540,8 +590,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _maximized = true;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_maximized(_nativeHandle, 1);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_maximized(handle, 1);
         return this;
     }
 
@@ -549,10 +599,10 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _maximized = false;
-        if (_nativeHandle != IntPtr.Zero)
+        if (Native is { } handle)
         {
-            RustinoDllImports.rustino_set_minimized(_nativeHandle, 0);
-            RustinoDllImports.rustino_set_maximized(_nativeHandle, 0);
+            RustinoDllImports.rustino_set_minimized(handle, 0);
+            RustinoDllImports.rustino_set_maximized(handle, 0);
         }
         return this;
     }
@@ -561,8 +611,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _fullscreen = fullscreen;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_fullscreen(_nativeHandle, fullscreen ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_fullscreen(handle, fullscreen ? 1 : 0);
         return this;
     }
 
@@ -570,39 +620,39 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         _visible = visible;
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_visible(_nativeHandle, visible ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_visible(handle, visible ? 1 : 0);
         return this;
     }
 
     public RustinoWindow Focus()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_focus(_nativeHandle);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_focus(handle);
         return this;
     }
 
     public bool IsMinimized =>
-        _nativeHandle != IntPtr.Zero && RustinoDllImports.rustino_is_minimized(_nativeHandle) != 0;
+        Native is { } handle && RustinoDllImports.rustino_is_minimized(handle) != 0;
 
     public bool IsMaximized =>
-        _nativeHandle != IntPtr.Zero && RustinoDllImports.rustino_is_maximized(_nativeHandle) != 0;
+        Native is { } handle && RustinoDllImports.rustino_is_maximized(handle) != 0;
 
     public bool IsFullscreen =>
-        _nativeHandle != IntPtr.Zero && RustinoDllImports.rustino_is_fullscreen(_nativeHandle) != 0;
+        Native is { } handle && RustinoDllImports.rustino_is_fullscreen(handle) != 0;
 
     public (int X, int Y) GetPosition()
     {
-        if (_nativeHandle == IntPtr.Zero) return (0, 0);
-        RustinoDllImports.rustino_get_position(_nativeHandle, out var x, out var y);
+        if (Native is not { } handle) return (0, 0);
+        RustinoDllImports.rustino_get_position(handle, out var x, out var y);
         return (x, y);
     }
 
     public (int Width, int Height) GetSize()
     {
-        if (_nativeHandle == IntPtr.Zero) return (_width, _height);
-        RustinoDllImports.rustino_get_size(_nativeHandle, out var w, out var h);
+        if (Native is not { } handle) return (_width, _height);
+        RustinoDllImports.rustino_get_size(handle, out var w, out var h);
         return (w, h);
     }
 
@@ -611,16 +661,16 @@ public partial class RustinoWindow : IDisposable
     public RustinoWindow ExecuteScript(string script)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_evaluate_script(_nativeHandle, script);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_evaluate_script(handle, script);
         return this;
     }
 
     public RustinoWindow SendWebMessage(string message)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_send_web_message(_nativeHandle, message);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_send_web_message(handle, message);
         return this;
     }
 
@@ -629,8 +679,8 @@ public partial class RustinoWindow : IDisposable
         ThrowIfDisposed();
         if (factor <= 0 || !double.IsFinite(factor))
             throw new ArgumentOutOfRangeException(nameof(factor), "Zoom factor must be a positive finite number.");
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_zoom(_nativeHandle, factor);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_zoom(handle, factor);
         return this;
     }
 
@@ -639,8 +689,8 @@ public partial class RustinoWindow : IDisposable
     public MonitorInfo[] GetMonitors()
     {
         ThrowIfDisposed();
-        if (_nativeHandle == IntPtr.Zero) return [];
-        var ptr = RustinoDllImports.rustino_get_monitors(_nativeHandle);
+        if (Native is not { } handle) return [];
+        var ptr = RustinoDllImports.rustino_get_monitors(handle);
         var json = ConsumeStringResult(ptr);
         if (json == null) return [];
         return JsonSerializer.Deserialize(json, MonitorJsonContext.Default.MonitorInfoArray) ?? [];
@@ -649,8 +699,8 @@ public partial class RustinoWindow : IDisposable
     public MonitorInfo? GetCurrentMonitor()
     {
         ThrowIfDisposed();
-        if (_nativeHandle == IntPtr.Zero) return null;
-        var ptr = RustinoDllImports.rustino_get_current_monitor(_nativeHandle);
+        if (Native is not { } handle) return null;
+        var ptr = RustinoDllImports.rustino_get_current_monitor(handle);
         var json = ConsumeStringResult(ptr);
         if (json == null) return null;
         return JsonSerializer.Deserialize(json, MonitorJsonContext.Default.MonitorInfo);
@@ -661,25 +711,25 @@ public partial class RustinoWindow : IDisposable
     public RustinoWindow SetMenu(RustinoMenu menu)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_menu(_nativeHandle, menu.ToJson());
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_menu(handle, menu.ToJson());
         return this;
     }
 
     public RustinoWindow RemoveMenu()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_remove_menu(_nativeHandle);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_remove_menu(handle);
         return this;
     }
 
     public RustinoWindow ShowContextMenu(RustinoMenu menu, double? x = null, double? y = null)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
+        if (Native is { } handle)
             RustinoDllImports.rustino_show_context_menu(
-                _nativeHandle, menu.ToJson(), x ?? -1, y ?? -1);
+                handle, menu.ToJson(), x ?? -1, y ?? -1);
         return this;
     }
 
@@ -690,16 +740,16 @@ public partial class RustinoWindow : IDisposable
     public RustinoWindow SetMenuItemEnabled(string id, bool enabled)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_menu_item_enabled(_nativeHandle, id, enabled ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_menu_item_enabled(handle, id, enabled ? 1 : 0);
         return this;
     }
 
     public RustinoWindow SetMenuItemChecked(string id, bool isChecked)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_menu_item_checked(_nativeHandle, id, isChecked ? 1 : 0);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_menu_item_checked(handle, id, isChecked ? 1 : 0);
         return this;
     }
 
@@ -707,8 +757,8 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_menu_item_text(_nativeHandle, id, text);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_menu_item_text(handle, id, text);
         return this;
     }
 
@@ -720,32 +770,47 @@ public partial class RustinoWindow : IDisposable
     // as a mask that follows the menu bar's colors. menuOnLeftClick: false leaves left clicks to
     // TrayIconClicked (macOS, Windows).
     public RustinoWindow SetTrayIcon(string iconPath, string? tooltip = null, RustinoMenu? menu = null,
-        string? title = null, bool isTemplateIcon = false, bool menuOnLeftClick = true)
-    {
-        ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_tray_icon(
-                _nativeHandle, iconPath, tooltip, menu?.ToJson(), title,
-                isTemplateIcon ? 1 : 0, menuOnLeftClick ? 1 : 0);
-        return this;
-    }
+        string? title = null, bool isTemplateIcon = false, bool menuOnLeftClick = true) =>
+        SetTrayIcon(iconPath, tempFile: false, tooltip, menu, title, isTemplateIcon, menuOnLeftClick);
 
+    // Written to a temporary file, deleted when the tray icon is replaced or removed and by Dispose
     public RustinoWindow SetTrayIcon(Stream icon, string? tooltip = null, RustinoMenu? menu = null,
         string? title = null, bool isTemplateIcon = false, bool menuOnLeftClick = true)
     {
         ThrowIfDisposed();
-        var tempPath = Path.Combine(Path.GetTempPath(), $"rustino_tray_{Guid.NewGuid():N}.png");
-        using (var fs = File.Create(tempPath))
-            icon.CopyTo(fs);
-        return SetTrayIcon(tempPath, tooltip, menu, title, isTemplateIcon, menuOnLeftClick);
+        return SetTrayIcon(WriteTempFile(icon, "rustino_tray"), tempFile: true,
+            tooltip, menu, title, isTemplateIcon, menuOnLeftClick);
+    }
+
+    private RustinoWindow SetTrayIcon(string iconPath, bool tempFile, string? tooltip, RustinoMenu? menu,
+        string? title, bool isTemplateIcon, bool menuOnLeftClick)
+    {
+        var used = false;
+        try
+        {
+            ThrowIfDisposed();
+            if (Native is { } handle)
+            {
+                RustinoDllImports.rustino_set_tray_icon(
+                    handle, iconPath, tooltip, menu?.ToJson(), title,
+                    isTemplateIcon ? 1 : 0, menuOnLeftClick ? 1 : 0);
+                used = true;
+            }
+        }
+        finally
+        {
+            if (tempFile && !used) DeleteFile(iconPath);
+        }
+        DeleteFile(Interlocked.Exchange(ref _trayIconTempFile, used && tempFile ? iconPath : null));
+        return this;
     }
 
     // Text next to the tray icon (macOS, Linux); null removes it.
     public RustinoWindow SetTrayTitle(string? title)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_set_tray_title(_nativeHandle, title);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_set_tray_title(handle, title);
         return this;
     }
 
@@ -754,11 +819,11 @@ public partial class RustinoWindow : IDisposable
     public RustinoWindow SetBadgeCount(int? count, string? background = null, string? foreground = null)
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
+        if (Native is { } handle)
         {
             var (bgR, bgG, bgB) = ParseHexColor(background, 0xE0, 0x1E, 0x5A);
             var (fgR, fgG, fgB) = ParseHexColor(foreground, 0xFF, 0xFF, 0xFF);
-            RustinoDllImports.rustino_set_badge_count(_nativeHandle, count ?? 0, bgR, bgG, bgB, fgR, fgG, fgB);
+            RustinoDllImports.rustino_set_badge_count(handle, count ?? 0, bgR, bgG, bgB, fgR, fgG, fgB);
         }
         return this;
     }
@@ -787,8 +852,9 @@ public partial class RustinoWindow : IDisposable
     public RustinoWindow RemoveTrayIcon()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_remove_tray_icon(_nativeHandle);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_remove_tray_icon(handle);
+        DeleteFile(Interlocked.Exchange(ref _trayIconTempFile, null));
         return this;
     }
 
@@ -802,10 +868,10 @@ public partial class RustinoWindow : IDisposable
         bool multiSelect = false)
     {
         ThrowIfDisposed();
-        if (_nativeHandle == IntPtr.Zero) return null;
+        if (Native is not { } handle) return null;
         var filterStr = FileFilter.Encode(filters);
         var ptr = RustinoDllImports.rustino_show_open_file_dialog(
-            _nativeHandle, title, defaultPath, filterStr, multiSelect ? 1 : 0);
+            handle, title, defaultPath, filterStr, multiSelect ? 1 : 0);
         return ConsumePathResult(ptr);
     }
 
@@ -815,10 +881,10 @@ public partial class RustinoWindow : IDisposable
         FileFilter[]? filters = null)
     {
         ThrowIfDisposed();
-        if (_nativeHandle == IntPtr.Zero) return null;
+        if (Native is not { } handle) return null;
         var filterStr = FileFilter.Encode(filters);
         var ptr = RustinoDllImports.rustino_show_save_file_dialog(
-            _nativeHandle, title, defaultPath, filterStr);
+            handle, title, defaultPath, filterStr);
         return ConsumeStringResult(ptr);
     }
 
@@ -828,9 +894,9 @@ public partial class RustinoWindow : IDisposable
         bool multiSelect = false)
     {
         ThrowIfDisposed();
-        if (_nativeHandle == IntPtr.Zero) return null;
+        if (Native is not { } handle) return null;
         var ptr = RustinoDllImports.rustino_show_select_folder_dialog(
-            _nativeHandle, title, defaultPath, multiSelect ? 1 : 0);
+            handle, title, defaultPath, multiSelect ? 1 : 0);
         return ConsumePathResult(ptr);
     }
 
@@ -842,8 +908,49 @@ public partial class RustinoWindow : IDisposable
         RustinoDialogIcon icon = RustinoDialogIcon.Info)
     {
         ThrowIfDisposed();
-        return (RustinoDialogResult)RustinoDllImports.rustino_show_message(
-            _nativeHandle, title, text, (int)buttons, (int)icon);
+        // The parent is optional, so it's passed as a pointer: keep the window alive by hand
+        var parent = Native;
+        var addedRef = false;
+        try
+        {
+            parent?.DangerousAddRef(ref addedRef);
+            return (RustinoDialogResult)RustinoDllImports.rustino_show_message(
+                addedRef ? parent!.DangerousGetHandle() : IntPtr.Zero, title, text, (int)buttons, (int)icon);
+        }
+        finally
+        {
+            if (addedRef)
+                parent!.DangerousRelease();
+        }
+    }
+
+    private static string WriteTempFile(Stream content, string prefix)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.png");
+        try
+        {
+            using var file = File.Create(path);
+            content.CopyTo(file);
+        }
+        catch
+        {
+            DeleteFile(path);
+            throw;
+        }
+        return path;
+    }
+
+    private static void DeleteFile(string? path)
+    {
+        if (path is null) return;
+        try { File.Delete(path); }
+        catch (Exception) { }
+    }
+
+    private void DeleteTempIconFiles()
+    {
+        DeleteFile(Interlocked.Exchange(ref _iconTempFile, null));
+        DeleteFile(Interlocked.Exchange(ref _trayIconTempFile, null));
     }
 
     private static string? ConsumeStringResult(IntPtr ptr)
@@ -875,17 +982,19 @@ public partial class RustinoWindow : IDisposable
     {
         ThrowIfDisposed();
 
-        IntPtr nativeHandle;
+        RustinoWindowHandle nativeHandle;
+        var addedRef = false;
         lock (_lifecycleLock)
         {
             ThrowIfDisposed();
             if (_runStarted)
                 throw new InvalidOperationException("WaitForClose() can only start the native window once.");
-            EnsureNative();
-            RegisterCallbacks();
-            nativeHandle = _nativeHandle;
+            nativeHandle = EnsureNativeLocked();
+            // Dispose only closes a running window: this reference keeps the native window until
+            // the native call returned, then releasing it frees the window
+            nativeHandle.DangerousAddRef(ref addedRef);
+            RegisterCallbacks(nativeHandle);
             _runStarted = true;
-            Interlocked.Exchange(ref _waitForCloseActive, 1);
         }
 
         try
@@ -918,46 +1027,39 @@ public partial class RustinoWindow : IDisposable
         }
         finally
         {
-            lock (_lifecycleLock)
-            {
-                Interlocked.Exchange(ref _waitForCloseActive, 0);
-                UnregisterCallbacks();
-                // Dispose may have requested a close before the native call acquired its
-                // own reference. Keep the handle alive until that call has returned.
-                if (Volatile.Read(ref _disposed) != 0 && _nativeHandle != IntPtr.Zero)
-                {
-                    RustinoDllImports.rustino_dtor(_nativeHandle);
-                    _nativeHandle = IntPtr.Zero;
-                }
-                if (Interlocked.Exchange(ref _logCallbackReleasePending, 0) != 0)
-                    ReleaseLogCallbackHandle();
-            }
+            Instances.TryRemove(new KeyValuePair<IntPtr, RustinoWindow>(nativeHandle.Key, this));
+            if (addedRef)
+                nativeHandle.DangerousRelease();
         }
     }
 
     public void Close()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero)
-            RustinoDllImports.rustino_close(_nativeHandle);
+        if (Native is { } handle)
+            RustinoDllImports.rustino_close(handle);
     }
 
     // --- Native lifecycle ---
 
-    private void EnsureNative()
+    // The native window once it exists: null before, and after Dispose. A call that races with
+    // Dispose gets an ObjectDisposedException from the marshaller, never a freed window.
+    private RustinoWindowHandle? Native => _nativeHandle is { IsClosed: false } handle ? handle : null;
+
+    private RustinoWindowHandle EnsureNative()
     {
         lock (_lifecycleLock)
-            EnsureNativeLocked();
+            return EnsureNativeLocked();
     }
 
-    private void SetCreationOnly<T>(ref T field, T value, string setting, Func<IntPtr, T, int> nativeSetter)
+    private void SetCreationOnly<T>(ref T field, T value, string setting, Func<RustinoWindowHandle, T, int> nativeSetter)
     {
         lock (_lifecycleLock)
         {
             ThrowIfDisposed();
             if (_runStarted)
                 throw CreationSettingStarted(setting);
-            if (_nativeHandle != IntPtr.Zero && nativeSetter(_nativeHandle, value) == 0)
+            if (Native is { } handle && nativeSetter(handle, value) == 0)
                 throw CreationSettingStarted(setting);
             field = value;
         }
@@ -966,10 +1068,10 @@ public partial class RustinoWindow : IDisposable
     private static InvalidOperationException CreationSettingStarted(string setting) =>
         new($"{setting} can only be changed before WaitForClose() starts the native window.");
 
-    private void EnsureNativeLocked()
+    private RustinoWindowHandle EnsureNativeLocked()
     {
         ThrowIfDisposed();
-        if (_nativeHandle != IntPtr.Zero) return;
+        if (_nativeHandle is { } existing) return existing;
 
         var titlePtr = Marshal.StringToCoTaskMemUTF8(_title);
         var iconPtr = _iconFile != null ? Marshal.StringToCoTaskMemUTF8(_iconFile) : IntPtr.Zero;
@@ -984,9 +1086,11 @@ public partial class RustinoWindow : IDisposable
         // The handle roots only a WeakReference, so logging does not keep the RustinoWindow
         // alive forever. Install the callback before SetLogger too, so logging can be enabled
         // after Load() has created the native instance. The static delegate remains rooted.
-        _logCallbackHandle = GCHandle.Alloc(new WeakReference<RustinoWindow>(this));
+        // RustinoWindowHandle frees it with the native window.
+        var logContext = GCHandle.Alloc(new WeakReference<RustinoWindow>(this));
         var logCallbackPtr = Marshal.GetFunctionPointerForDelegate(LogCb);
-        var logContextPtr = GCHandle.ToIntPtr(_logCallbackHandle);
+        var logContextPtr = GCHandle.ToIntPtr(logContext);
+        RustinoWindowHandle handle;
 
         try
         {
@@ -1016,14 +1120,14 @@ public partial class RustinoWindow : IDisposable
                 AboutComments = aboutCommentsPtr,
             };
 
-            _nativeHandle = RustinoDllImports.rustino_ctor(ref parameters);
-
-            if (_nativeHandle == IntPtr.Zero)
+            var instance = RustinoDllImports.rustino_ctor(ref parameters);
+            if (instance == IntPtr.Zero)
                 throw new InvalidOperationException("Failed to create native Rustino window.");
+            handle = new RustinoWindowHandle(instance, logContext);
         }
         catch
         {
-            ReleaseLogCallbackHandle();
+            logContext.Free();
             throw;
         }
         finally
@@ -1043,37 +1147,37 @@ public partial class RustinoWindow : IDisposable
         {
             // Apply extended configuration via setters
             if (_transparent)
-                RustinoDllImports.rustino_set_transparent(_nativeHandle, 1);
+                RustinoDllImports.rustino_set_transparent(handle, 1);
             if (!_decorations)
-                RustinoDllImports.rustino_set_decorations(_nativeHandle, 0);
-            ApplyExtConfiguration();
-            ApplyWebViewConfiguration();
+                RustinoDllImports.rustino_set_decorations(handle, 0);
+            ApplyExtConfiguration(handle);
+            ApplyWebViewConfiguration(handle);
             if (!_visible)
-                RustinoDllImports.rustino_set_visible(_nativeHandle, 0);
+                RustinoDllImports.rustino_set_visible(handle, 0);
             if (_maximized)
-                RustinoDllImports.rustino_set_maximized(_nativeHandle, 1);
+                RustinoDllImports.rustino_set_maximized(handle, 1);
             if (_fullscreen)
-                RustinoDllImports.rustino_set_fullscreen(_nativeHandle, 1);
+                RustinoDllImports.rustino_set_fullscreen(handle, 1);
             if (_position is { } pos)
-                RustinoDllImports.rustino_set_position(_nativeHandle, pos.X, pos.Y);
+                RustinoDllImports.rustino_set_position(handle, pos.X, pos.Y);
             if (_minSize is { } min)
-                RustinoDllImports.rustino_set_min_size(_nativeHandle, min.Width, min.Height);
+                RustinoDllImports.rustino_set_min_size(handle, min.Width, min.Height);
             if (_maxSize is { } max)
-                RustinoDllImports.rustino_set_max_size(_nativeHandle, max.Width, max.Height);
+                RustinoDllImports.rustino_set_max_size(handle, max.Width, max.Height);
             if (_backgroundColor is { } bg)
-                RustinoDllImports.rustino_set_background_color(_nativeHandle, bg.R, bg.G, bg.B, bg.A);
+                RustinoDllImports.rustino_set_background_color(handle, bg.R, bg.G, bg.B, bg.A);
             if (_userAgent != null)
-                RustinoDllImports.rustino_set_user_agent(_nativeHandle, _userAgent);
+                RustinoDllImports.rustino_set_user_agent(handle, _userAgent);
             if (_userDataFolder != null)
-                RustinoDllImports.rustino_set_user_data_folder(_nativeHandle, _userDataFolder);
+                RustinoDllImports.rustino_set_user_data_folder(handle, _userDataFolder);
             if (!_mediaAutoplay)
-                RustinoDllImports.rustino_set_media_autoplay(_nativeHandle, 0);
+                RustinoDllImports.rustino_set_media_autoplay(handle, 0);
             if (_zoomHotkeys)
-                RustinoDllImports.rustino_set_zoom_hotkeys(_nativeHandle, 1);
+                RustinoDllImports.rustino_set_zoom_hotkeys(handle, 1);
             foreach (var script in _initScripts)
-                RustinoDllImports.rustino_add_init_script(_nativeHandle, script);
+                RustinoDllImports.rustino_add_init_script(handle, script);
             foreach (var scheme in _customSchemes.Keys)
-                RustinoDllImports.rustino_add_custom_scheme(_nativeHandle, scheme);
+                RustinoDllImports.rustino_add_custom_scheme(handle, scheme);
 
             if (_iconFile != null && OperatingSystem.IsMacOS())
             {
@@ -1082,37 +1186,34 @@ public partial class RustinoWindow : IDisposable
         }
         catch
         {
-            RustinoDllImports.rustino_dtor(_nativeHandle);
-            _nativeHandle = IntPtr.Zero;
+            handle.Dispose();
             throw;
         }
+        _nativeHandle = handle;
+        return handle;
     }
 
     // --- Callback wiring ---
 
-    private void RegisterCallbacks()
+    private void RegisterCallbacks(RustinoWindowHandle handle)
     {
-        Instances[_nativeHandle] = this;
-        RustinoDllImports.rustino_set_callback_context(_nativeHandle, _nativeHandle);
-        RustinoDllImports.rustino_set_closing_handler(_nativeHandle, ClosingCb);
-        RustinoDllImports.rustino_set_closed_handler(_nativeHandle, ClosedCb);
-        RustinoDllImports.rustino_set_resized_handler(_nativeHandle, ResizedCb);
-        RustinoDllImports.rustino_set_moved_handler(_nativeHandle, MovedCb);
-        RustinoDllImports.rustino_set_focus_changed_handler(_nativeHandle, FocusCb);
-        RegisterExtCallbacks();
-        RegisterWebViewCallbacks();
-        RustinoDllImports.rustino_set_web_message_received_handler(_nativeHandle, WebMsgCb);
-        RustinoDllImports.rustino_set_page_load_handler(_nativeHandle, PageLoadCb);
-        RustinoDllImports.rustino_set_navigation_handler(_nativeHandle, NavCb);
-        RustinoDllImports.rustino_set_menu_event_handler(_nativeHandle, MenuItemCb);
-        RustinoDllImports.rustino_set_tray_icon_event_handler(_nativeHandle, TrayCb);
-        RustinoDllImports.rustino_set_custom_scheme_handler(_nativeHandle, CustomSchemeCb);
+        Instances[handle.Key] = this;
+        RustinoDllImports.rustino_set_callback_context(handle, handle.Key);
+        RustinoDllImports.rustino_set_closing_handler(handle, ClosingCb);
+        RustinoDllImports.rustino_set_closed_handler(handle, ClosedCb);
+        RustinoDllImports.rustino_set_resized_handler(handle, ResizedCb);
+        RustinoDllImports.rustino_set_moved_handler(handle, MovedCb);
+        RustinoDllImports.rustino_set_focus_changed_handler(handle, FocusCb);
+        RegisterExtCallbacks(handle);
+        RegisterWebViewCallbacks(handle);
+        RustinoDllImports.rustino_set_web_message_received_handler(handle, WebMsgCb);
+        RustinoDllImports.rustino_set_page_load_handler(handle, PageLoadCb);
+        RustinoDllImports.rustino_set_navigation_handler(handle, NavCb);
+        RustinoDllImports.rustino_set_menu_event_handler(handle, MenuItemCb);
+        RustinoDllImports.rustino_set_tray_icon_event_handler(handle, TrayCb);
+        RustinoDllImports.rustino_set_custom_scheme_handler(handle, CustomSchemeCb);
     }
 
-    private void UnregisterCallbacks()
-    {
-        Instances.TryRemove(_nativeHandle, out _);
-    }
 
     // --- Static native callbacks ---
 
@@ -1124,10 +1225,13 @@ public partial class RustinoWindow : IDisposable
         return args.Cancel ? 1 : 0;
     });
 
+    // A failing handler or observer doesn't keep the streams from completing
     private static void OnClosedNative(IntPtr ctx) => GuardNativeCallback(ctx, nameof(OnClosedNative), w =>
     {
-        w.WindowClosed?.Invoke(w, EventArgs.Empty);
-        w._windowClosedObs.Emit(EventArgs.Empty);
+        try { w.WindowClosed?.Invoke(w, EventArgs.Empty); }
+        catch (Exception exception) { ReportCallbackException(w, nameof(OnClosedNative), exception); }
+        try { w._windowClosedObs.Emit(EventArgs.Empty); }
+        catch (Exception exception) { ReportCallbackException(w, nameof(OnClosedNative), exception); }
         CompleteAllObservables(w);
     });
 
@@ -1291,81 +1395,69 @@ public partial class RustinoWindow : IDisposable
 
     // --- Observable completion ---
 
+    // Every stream completes even when observers throw; their exceptions are reported
     private static void CompleteAllObservables(RustinoWindow w)
     {
-        w._sizeChangedObs.Complete();
-        CompleteExtObservables(w);
-        CompleteWebViewObservables(w);
-        w._locationChangedObs.Complete();
-        w._focusChangedObs.Complete();
-        w._webMessageObs.Complete();
-        w._webMessageWithSourceObs.Complete();
-        w._pageLoadedObs.Complete();
-        w._navigatingObs.Complete();
-        w._windowClosedObs.Complete();
-        w._menuItemClickedObs.Complete();
-        w._menuItemCheckedChangedObs.Complete();
-        w._trayIconClickedObs.Complete();
+        ICompletable[] observables =
+        [
+            w._sizeChangedObs,
+            .. w.ExtObservables,
+            .. w.WebViewObservables,
+            w._locationChangedObs,
+            w._focusChangedObs,
+            w._webMessageObs,
+            w._webMessageWithSourceObs,
+            w._pageLoadedObs,
+            w._navigatingObs,
+            w._windowClosedObs,
+            w._menuItemClickedObs,
+            w._menuItemCheckedChangedObs,
+            w._trayIconClickedObs,
+        ];
+        foreach (var observable in observables)
+        {
+            try { observable.Complete(); }
+            catch (Exception exception) { ReportCallbackException(w, nameof(IObserver<object>.OnCompleted), exception); }
+        }
     }
 
     // --- Dispose ---
 
-    public void Dispose() => Dispose(disposing: true);
-
-    private void Dispose(bool disposing)
+    // The native window is freed once no call uses it anymore: at once, or, while the window runs,
+    // when it has closed and WaitForClose returns. Without Dispose, RustinoWindowHandle's finalizer frees it.
+    public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
             return;
 
         try
         {
-            if (disposing)
-                CompleteAllObservables(this);
+            CompleteAllObservables(this);
         }
         finally
         {
+            RustinoWindowHandle? handle;
+            bool runStarted;
             lock (_lifecycleLock)
             {
-                if (_nativeHandle != IntPtr.Zero)
-                {
-                    Instances.TryRemove(_nativeHandle, out _);
-                    if (Volatile.Read(ref _waitForCloseActive) != 0)
-                    {
-                        // The native call may not have started yet, so freeing here could
-                        // leave WaitForClose with a dangling pointer.
-                        RustinoDllImports.rustino_close(_nativeHandle);
-                    }
-                    else
-                    {
-                        RustinoDllImports.rustino_dtor(_nativeHandle);
-                        _nativeHandle = IntPtr.Zero;
-                    }
-                }
-
-                if (Volatile.Read(ref _waitForCloseActive) != 0)
-                    Interlocked.Exchange(ref _logCallbackReleasePending, 1);
-                else
-                    ReleaseLogCallbackHandle();
+                handle = _nativeHandle;
+                runStarted = _runStarted;
             }
-
-            if (disposing)
-                GC.SuppressFinalize(this);
+            if (handle is not null)
+            {
+                Instances.TryRemove(new KeyValuePair<IntPtr, RustinoWindow>(handle.Key, this));
+                // A running window only closes here: WaitForClose holds a reference until the native
+                // call returned, then the native window is freed. Not under the lock: the close may
+                // wait for the event loop, whose handlers may need the lock (e.g. Load).
+                if (runStarted)
+                    RustinoDllImports.rustino_close(handle);
+                handle.Dispose();
+            }
+            DeleteTempIconFiles();
         }
     }
 
-    private void ReleaseLogCallbackHandle()
-    {
-        if (_logCallbackHandle.IsAllocated)
-            _logCallbackHandle.Free();
-    }
-
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-
-    ~RustinoWindow()
-    {
-        try { Dispose(disposing: false); }
-        catch (Exception) { }
-    }
 
     // --- dynamic macOS Dock Icon / Windows AppId Helpers ---
 

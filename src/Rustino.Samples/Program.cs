@@ -32,8 +32,9 @@ RustinoWindow.RegisterNotificationAppId("Rustino", "Rustino", iconPath);
 
 // --- Splashscreen ---
 var splashPath = Path.Combine(AppContext.BaseDirectory, "splash.png");
-using (var splash = new RustinoSplashscreen(splashPath, 400, 400))
+if (RustinoSplashscreen.IsSupported) // Windows only
 {
+    using var splash = new RustinoSplashscreen(splashPath, 400, 400);
     Thread.Sleep(3000);
 }
 

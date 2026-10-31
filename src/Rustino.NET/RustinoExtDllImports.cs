@@ -11,85 +11,85 @@ internal static partial class RustinoExtDllImports
     private const string Lib = NativeLibraryResolver.LibName;
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_theme(IntPtr instance, int theme);
+    internal static extern void rustino_set_theme(RustinoWindowHandle instance, int theme);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_get_theme(IntPtr instance);
+    internal static extern int rustino_get_theme(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern double rustino_get_scale_factor(IntPtr instance);
+    internal static extern double rustino_get_scale_factor(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_progress_bar(IntPtr instance, int state, int progress);
+    internal static extern void rustino_set_progress_bar(RustinoWindowHandle instance, int state, int progress);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_request_user_attention(IntPtr instance, int kind);
+    internal static extern void rustino_request_user_attention(RustinoWindowHandle instance, int kind);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_beep(IntPtr instance);
+    internal static extern void rustino_beep(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_shadow(IntPtr instance, int shadow);
+    internal static extern void rustino_set_shadow(RustinoWindowHandle instance, int shadow);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_skip_taskbar(IntPtr instance, int skip);
+    internal static extern void rustino_set_skip_taskbar(RustinoWindowHandle instance, int skip);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_content_protection(IntPtr instance, int enabled);
+    internal static extern void rustino_set_content_protection(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_visible_on_all_workspaces(IntPtr instance, int visible);
+    internal static extern void rustino_set_visible_on_all_workspaces(RustinoWindowHandle instance, int visible);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_closable(IntPtr instance, int closable);
+    internal static extern void rustino_set_closable(RustinoWindowHandle instance, int closable);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_minimizable(IntPtr instance, int minimizable);
+    internal static extern void rustino_set_minimizable(RustinoWindowHandle instance, int minimizable);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_maximizable(IntPtr instance, int maximizable);
+    internal static extern void rustino_set_maximizable(RustinoWindowHandle instance, int maximizable);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_always_on_bottom(IntPtr instance, int onBottom);
+    internal static extern void rustino_set_always_on_bottom(RustinoWindowHandle instance, int onBottom);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_ignore_cursor_events(IntPtr instance, int ignore);
+    internal static extern void rustino_set_ignore_cursor_events(RustinoWindowHandle instance, int ignore);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_mac_title_bar_style(IntPtr instance, int style);
+    internal static extern void rustino_set_mac_title_bar_style(RustinoWindowHandle instance, int style);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_title_bar_overlay(IntPtr instance, int overlay);
+    internal static extern void rustino_set_title_bar_overlay(RustinoWindowHandle instance, int overlay);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_title_bar_overlay_color(IntPtr instance, byte r, byte g, byte b, byte a);
+    internal static extern void rustino_set_title_bar_overlay_color(RustinoWindowHandle instance, byte r, byte g, byte b, byte a);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_drag_regions_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_drag_regions_enabled(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_traffic_light_position(IntPtr instance, double x, double y);
+    internal static extern void rustino_set_traffic_light_position(RustinoWindowHandle instance, double x, double y);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_desktop_file_name(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_drag_window(IntPtr instance);
+    internal static extern void rustino_drag_window(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_drag_resize_window(IntPtr instance, int direction);
+    internal static extern void rustino_drag_resize_window(RustinoWindowHandle instance, int direction);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_theme_changed_handler(IntPtr instance, IntCallback handler);
+    internal static extern void rustino_set_theme_changed_handler(RustinoWindowHandle instance, IntCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_scale_factor_changed_handler(IntPtr instance, ScaleFactorCallback handler);
+    internal static extern void rustino_set_scale_factor_changed_handler(RustinoWindowHandle instance, ScaleFactorCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_urls_opened_handler(IntPtr instance, StringCallback handler);
+    internal static extern void rustino_set_urls_opened_handler(RustinoWindowHandle instance, StringCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_reopen_handler(IntPtr instance, IntCallback handler);
+    internal static extern void rustino_set_reopen_handler(RustinoWindowHandle instance, IntCallback handler);
 }

@@ -11,8 +11,7 @@ public partial class RustinoWindow
     public RustinoWindow Activate(string? activationToken = null)
     {
         ThrowIfDisposed();
-        EnsureNative();
-        RustinoDllImports.rustino_activate(_nativeHandle, activationToken);
+        RustinoDllImports.rustino_activate(EnsureNative(), activationToken);
         return this;
     }
 }

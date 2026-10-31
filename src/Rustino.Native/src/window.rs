@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::ffi::CString;
 use std::rc::Rc;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, mpsc};
 
 use tao::dpi::{PhysicalPosition, PhysicalSize};
 use tao::event::{Event, StartCause, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopClosed, EventLoopProxy, EventLoopWindowTarget};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::platform::run_return::EventLoopExtRunReturn;
 use tao::window::WindowBuilder;
 #[cfg(target_os = "windows")]
@@ -58,16 +59,108 @@ pub enum LoopEvent {
     Host(Box<HostRequest>),
 }
 
+/// The only user event of tao's event loop: the events are waiting in the `LoopProxy` queue.
+pub struct Wake;
+
+/// Sends events to the event loop of the app. They wait in a queue, behind one wake-up message:
+/// tao posts a message per event, and Windows drops the messages beyond the quota of a thread
+/// (10,000), so commands sent faster than the loop handles them would get lost, `Close` included.
+/// The queue is bounded too: otherwise threads sending without pause would starve the commands
+/// sent after theirs (e.g. `Close`), behind an ever longer queue.
+#[derive(Clone)]
+pub struct LoopProxy {
+    proxy: EventLoopProxy<Wake>,
+    queue: Arc<(Mutex<LoopQueue>, Condvar)>,
+}
+
+/// Beyond this many events, senders wait for the loop (except the loop thread itself)
+const QUEUE_LIMIT: usize = 10_000;
+/// A sender waits at most this long, then queues anyway: it may hold a lock the loop is waiting for
+const QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Events handled per wake-up, so that the loop also handles the system's events in between
+const BATCH: usize = 1_000;
+
+#[derive(Default)]
+struct LoopQueue {
+    events: VecDeque<LoopEvent>,
+    /// A wake-up message is on its way: the loop will take the events queued until then
+    wake_pending: bool,
+    /// The loop ended: nobody takes the events anymore
+    closed: bool,
+}
+
+impl LoopProxy {
+    fn new(proxy: EventLoopProxy<Wake>) -> Self {
+        Self {
+            proxy,
+            queue: Default::default(),
+        }
+    }
+
+    fn queue(&self) -> MutexGuard<'_, LoopQueue> {
+        self.queue.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Fails, giving the event back, once the event loop ended.
+    fn send(&self, event: LoopEvent) -> Result<(), LoopEvent> {
+        let mut queue = self.queue();
+        if queue.events.len() >= QUEUE_LIMIT && !crate::invoke::runs_event_loop() {
+            queue = self
+                .queue
+                .1
+                .wait_timeout_while(queue, QUEUE_WAIT, |q| !q.closed && q.events.len() >= QUEUE_LIMIT)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        if queue.closed {
+            return Err(event);
+        }
+        if !queue.wake_pending {
+            if self.proxy.send_event(Wake).is_err() {
+                return Err(event);
+            }
+            queue.wake_pending = true;
+        }
+        queue.events.push_back(event);
+        Ok(())
+    }
+
+    /// The next events for the loop, on a wake-up. Posts another wake-up while events remain;
+    /// otherwise the next `send` posts one.
+    fn take(&self) -> Vec<LoopEvent> {
+        let mut queue = self.queue();
+        let count = queue.events.len().min(BATCH);
+        let batch: Vec<_> = queue.events.drain(..count).collect();
+        queue.wake_pending = !queue.events.is_empty() && self.proxy.send_event(Wake).is_ok();
+        drop(queue);
+        self.queue.1.notify_all();
+        batch
+    }
+
+    /// The loop ended: the events still queued are dropped (e.g. the requests of windows that
+    /// wanted to join, whose `run` then fails).
+    fn close(&self) {
+        let events = {
+            let mut queue = self.queue();
+            queue.closed = true;
+            std::mem::take(&mut queue.events)
+        };
+        self.queue.1.notify_all();
+        drop(events);
+    }
+}
+
 /// Sends commands to one window of the event loop.
 #[derive(Clone)]
 pub struct CommandProxy {
     key: usize,
-    proxy: EventLoopProxy<LoopEvent>,
+    proxy: LoopProxy,
 }
 
 impl CommandProxy {
-    pub fn send_event(&self, cmd: RustinoCommand) -> Result<(), EventLoopClosed<LoopEvent>> {
-        self.proxy.send_event(LoopEvent::Command(self.key, cmd))
+    /// Fails once the event loop ended.
+    pub fn send_event(&self, cmd: RustinoCommand) -> Result<(), ()> {
+        self.proxy.send(LoopEvent::Command(self.key, cmd)).map_err(|_| ())
     }
 }
 
@@ -89,7 +182,7 @@ enum AppLoopState {
     Idle,
     /// The first window is being built on this thread: the other windows wait for its event loop
     Starting(std::thread::ThreadId),
-    Running(EventLoopProxy<LoopEvent>),
+    Running(LoopProxy),
 }
 
 static APP_LOOP: Mutex<AppLoopState> = Mutex::new(AppLoopState::Idle);
@@ -105,7 +198,7 @@ struct AppLoop;
 
 impl AppLoop {
     /// Returns the event loop to join, or `AppLoop` when this thread starts it.
-    fn join_or_start() -> Result<Result<EventLoopProxy<LoopEvent>, AppLoop>, String> {
+    fn join_or_start() -> Result<Result<LoopProxy, AppLoop>, String> {
         let this_thread = std::thread::current().id();
         let mut state = app_loop();
         loop {
@@ -126,7 +219,7 @@ impl AppLoop {
         }
     }
 
-    fn set_running(&self, proxy: EventLoopProxy<LoopEvent>) {
+    fn set_running(&self, proxy: LoopProxy) {
         *app_loop() = AppLoopState::Running(proxy);
         APP_LOOP_CHANGED.notify_all();
     }
@@ -170,6 +263,8 @@ impl RustinoWindow {
         match &setup.phase {
             Phase::Starting => setup.pending.push(RustinoCommand::Close),
             Phase::Running(proxy) => {
+                let proxy = proxy.clone();
+                drop(setup);
                 let _ = proxy.send_event(RustinoCommand::Close);
             }
             Phase::Created | Phase::Exited => {}
@@ -203,6 +298,9 @@ impl RustinoWindow {
             Phase::Created => store(&mut setup),
             Phase::Starting => setup.pending.push(cmd),
             Phase::Running(proxy) => {
+                // Not under the lock: the send may wait for the event loop
+                let proxy = proxy.clone();
+                drop(setup);
                 let _ = proxy.send_event(cmd);
             }
             Phase::Exited => {}
@@ -218,17 +316,22 @@ impl RustinoWindow {
                 setup.pending.push(cmd);
                 true
             }
-            Phase::Running(proxy) => proxy.send_event(cmd).is_ok(),
+            Phase::Running(proxy) => {
+                let proxy = proxy.clone();
+                drop(setup);
+                proxy.send_event(cmd).is_ok()
+            }
             Phase::Exited => false,
         }
     }
 
     /// Sends a command to the running window only.
     pub fn send_to_running(&self, cmd: RustinoCommand) -> bool {
-        match &self.setup().phase {
-            Phase::Running(proxy) => proxy.send_event(cmd).is_ok(),
-            _ => false,
-        }
+        let proxy = match &self.setup().phase {
+            Phase::Running(proxy) => proxy.clone(),
+            _ => return false,
+        };
+        proxy.send_event(cmd).is_ok()
     }
 
     pub fn is_running(&self) -> bool {
@@ -279,13 +382,13 @@ impl RustinoWindow {
             Err(app_loop) => app_loop,
         };
 
-        let mut builder = EventLoopBuilder::<LoopEvent>::with_user_event();
+        let mut builder = EventLoopBuilder::<Wake>::with_user_event();
         #[cfg(target_os = "windows")]
         builder
             .with_any_thread(true)
             .with_msg_hook(|msg| crate::accelerators::translate(unsafe { &*msg.cast() }));
         let mut event_loop = builder.build();
-        let proxy = event_loop.create_proxy();
+        let proxy = LoopProxy::new(event_loop.create_proxy());
 
         let main = WindowRuntime::new(self.key(), &self.state, started, &event_loop, &proxy, true)?;
         app_loop.set_running(proxy.clone());
@@ -293,25 +396,32 @@ impl RustinoWindow {
 
         // The first window runs the app: its closing closes the others
         let mut windows = vec![main];
+        let loop_proxy = proxy.clone();
         event_loop.run_return(move |event, target, control_flow| {
             if *control_flow != ControlFlow::Exit {
                 *control_flow = ControlFlow::Wait;
             }
 
             let (index, event) = match event {
-                Event::UserEvent(LoopEvent::Host(request)) => {
-                    // Dropped once the app closes: its `run` fails
-                    if *control_flow != ControlFlow::Exit {
-                        windows.extend(WindowRuntime::host(*request, target, &proxy));
+                Event::UserEvent(Wake) => {
+                    for event in proxy.take() {
+                        // The app closes: the other windows close with it
+                        if *control_flow == ControlFlow::Exit {
+                            break;
+                        }
+                        match event {
+                            LoopEvent::Host(request) => {
+                                windows.extend(WindowRuntime::host(*request, target, &proxy));
+                            }
+                            LoopEvent::Command(key, cmd) => {
+                                // The commands of a closed window are dropped
+                                if let Some(index) = windows.iter().position(|w| w.key == key) {
+                                    deliver(&mut windows, index, Event::UserEvent(cmd), target, control_flow);
+                                }
+                            }
+                        }
                     }
                     return;
-                }
-                Event::UserEvent(LoopEvent::Command(key, cmd)) => {
-                    // The commands of a closed window are dropped
-                    let Some(index) = windows.iter().position(|w| w.key == key) else {
-                        return;
-                    };
-                    (index, Event::UserEvent(cmd))
                 }
                 Event::MainEventsCleared => {
                     for window in &mut windows {
@@ -320,6 +430,7 @@ impl RustinoWindow {
                     return;
                 }
                 Event::LoopDestroyed => {
+                    proxy.close();
                     for window in &windows {
                         window.closed();
                     }
@@ -346,21 +457,15 @@ impl RustinoWindow {
                     (index, event)
                 }
             };
-
-            if windows[index].handle(event, target) {
-                if index == 0 {
-                    *control_flow = ControlFlow::Exit;
-                } else {
-                    windows.remove(index).closed();
-                }
-            }
+            deliver(&mut windows, index, event, target, control_flow);
         });
+        loop_proxy.close();
         Ok(())
     }
 
     /// Runs the window in the event loop of the app, which runs on another thread, and waits for
     /// its closing.
-    fn join(&self, started: Started, app_loop: EventLoopProxy<LoopEvent>) -> Result<(), String> {
+    fn join(&self, started: Started, app_loop: LoopProxy) -> Result<(), String> {
         // Waiting here would block the event loop
         if crate::invoke::runs_event_loop() {
             return Err("The event loop of the app runs on this thread: start the other windows from another thread.".into());
@@ -374,7 +479,7 @@ impl RustinoWindow {
         };
         let closed = || "The app closed before the window could open.".to_string();
         app_loop
-            .send_event(LoopEvent::Host(Box::new(request)))
+            .send(LoopEvent::Host(Box::new(request)))
             .map_err(|_| closed())?;
         replies.recv().map_err(|_| closed())??;
         self.set_running(CommandProxy {
@@ -422,8 +527,8 @@ impl WindowRuntime {
     /// Builds a window that joins the running event loop, and tells its `run` the outcome.
     fn host(
         request: HostRequest,
-        target: &EventLoopWindowTarget<LoopEvent>,
-        proxy: &EventLoopProxy<LoopEvent>,
+        target: &EventLoopWindowTarget<Wake>,
+        proxy: &LoopProxy,
     ) -> Option<Self> {
         let HostRequest {
             key,
@@ -455,8 +560,8 @@ impl WindowRuntime {
         key: usize,
         state: &Arc<SharedState>,
         started: Started,
-        target: &EventLoopWindowTarget<LoopEvent>,
-        proxy: &EventLoopProxy<LoopEvent>,
+        target: &EventLoopWindowTarget<Wake>,
+        proxy: &LoopProxy,
         #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] main: bool,
     ) -> Result<Self, String> {
         let Started {
@@ -577,6 +682,7 @@ impl WindowRuntime {
             callbacks.context,
             state,
             proxy.clone(),
+            config.logger(),
         );
 
         for script in &config.initialization_scripts {
@@ -733,7 +839,7 @@ impl WindowRuntime {
     }
 
     /// Handles an event of this window. Returns true when the window closes.
-    fn handle(&mut self, event: Event<'_, RustinoCommand>, target: &EventLoopWindowTarget<LoopEvent>) -> bool {
+    fn handle(&mut self, event: Event<'_, RustinoCommand>, target: &EventLoopWindowTarget<Wake>) -> bool {
         let Some(event) = self.ext.handle_event(event, target, &self.window, &self.webview) else {
             return false;
         };
@@ -888,6 +994,23 @@ impl Drop for EventLoopRegistration {
     }
 }
 
+/// Gives an event to the window at `index`, which may close: the first window ends the event loop.
+fn deliver(
+    windows: &mut Vec<WindowRuntime>,
+    index: usize,
+    event: Event<'_, RustinoCommand>,
+    target: &EventLoopWindowTarget<Wake>,
+    control_flow: &mut ControlFlow,
+) {
+    if windows[index].handle(event, target) {
+        if index == 0 {
+            *control_flow = ControlFlow::Exit;
+        } else {
+            windows.remove(index).closed();
+        }
+    }
+}
+
 fn send_to_event_loops(command: impl Fn() -> RustinoCommand) {
     if let Ok(loops) = EVENT_LOOPS.lock() {
         for (_, proxy) in loops.iter() {
@@ -930,23 +1053,18 @@ fn warn_unsupported_settings(#[allow(unused_variables)] config: &WindowConfig) {
     #[cfg(not(target_os = "windows"))]
     {
         if !config.web_security_enabled {
-            log_warning(config, "[rustino] Warning: SetWebSecurityEnabled(false) is only supported on Windows (WebView2). Ignored on this platform.");
+            config.logger().warning("[rustino] Warning: SetWebSecurityEnabled(false) is only supported on Windows (WebView2). Ignored on this platform.");
         }
         if config.ignore_certificate_errors {
-            log_warning(config, "[rustino] Warning: SetIgnoreCertificateErrorsEnabled(true) is only supported on Windows (WebView2). Ignored on this platform.");
+            config.logger().warning("[rustino] Warning: SetIgnoreCertificateErrorsEnabled(true) is only supported on Windows (WebView2). Ignored on this platform.");
         }
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-fn log_warning(config: &WindowConfig, message: &str) {
-    if let Some(callback) = config.log_callback {
-        let c_message = std::ffi::CString::new(message).unwrap_or_default();
-        unsafe {
-            callback(config.log_context, 3, c_message.as_ptr());
-        }
-    } else if config.log_verbosity > 0 {
-        eprintln!("{}", message);
+/// The host can't get the result of a queued command: tell its logger when one fails.
+fn report_failure(config: &WindowConfig, operation: &str, result: wry::Result<()>) {
+    if let Err(e) = result {
+        config.logger().error(&format!("[rustino] {operation} failed: {e}"));
     }
 }
 
@@ -1065,37 +1183,34 @@ fn dispatch_command(
         }
         RustinoCommand::SetAbout(field, value) => config.set_about(field, value),
         RustinoCommand::EvaluateScript(js) => {
-            let _ = webview.evaluate_script(&js);
+            report_failure(config, "ExecuteScript", webview.evaluate_script(&js));
         }
         RustinoCommand::SendWebMessage(msg) => {
             let data = crate::util::js_string_literal(&msg);
             let js = format!("window.dispatchEvent(new MessageEvent('message',{{data:{data}}}));");
-            let _ = webview.evaluate_script(&js);
+            report_failure(config, "SendWebMessage", webview.evaluate_script(&js));
         }
         RustinoCommand::LoadUrl(url) => {
-            let _ = webview.load_url(&url);
+            report_failure(config, "Load", webview.load_url(&url));
             config.start_html = None;
         }
         RustinoCommand::LoadHtml(html) => {
-            let _ = webview.load_html(&html);
+            report_failure(config, "Load", webview.load_html(&html));
             config.start_html = Some(html);
         }
         RustinoCommand::Reload => {
             // A page loaded from a string has no URL: reloading it would show about:blank
-            match &config.start_html {
-                Some(html) if webview.url().is_ok_and(|url| url == "about:blank") => {
-                    let _ = webview.load_html(html);
-                }
-                _ => {
-                    let _ = webview.reload();
-                }
-            }
+            let result = match &config.start_html {
+                Some(html) if webview.url().is_ok_and(|url| url == "about:blank") => webview.load_html(html),
+                _ => webview.reload(),
+            };
+            report_failure(config, "Reload", result);
         }
         RustinoCommand::SetZoom(factor) => {
-            let _ = webview.zoom(factor);
+            report_failure(config, "SetZoom", webview.zoom(factor));
         }
         RustinoCommand::SetBackgroundColor(r, g, b, a) => {
-            let _ = webview.set_background_color((r, g, b, a));
+            report_failure(config, "SetBackgroundColor", webview.set_background_color((r, g, b, a)));
         }
         RustinoCommand::Window(_) => {} // run by window_ext
         RustinoCommand::Invoke(task) => task.run(window, webview),

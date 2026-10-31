@@ -31,7 +31,7 @@ internal static class NativeBinary
 }
 
 /// <summary>A [Fact] that is skipped, with the reason, when the native library has not been built.</summary>
-internal sealed class NativeLibraryFactAttribute : FactAttribute
+internal class NativeLibraryFactAttribute : FactAttribute
 {
     public NativeLibraryFactAttribute()
     {
@@ -48,5 +48,18 @@ internal sealed class NativeLibraryFactAttribute : FactAttribute
         if (!File.Exists(path))
             Skip = $"Native library not built: {path} does not exist. Run `cargo build --release` in src/Rustino.Native " +
                    $"(or set {NativeBinary.PathVariable} to the library to check).";
+    }
+}
+
+/// <summary>
+/// A <see cref="NativeLibraryFactAttribute"/> skipped, visibly, on macOS and Linux: there the first window
+/// needs the main thread, which the test runner keeps.
+/// </summary>
+internal sealed class WindowsNativeLibraryFactAttribute : NativeLibraryFactAttribute
+{
+    public WindowsNativeLibraryFactAttribute()
+    {
+        if (Skip is null && !OperatingSystem.IsWindows())
+            Skip = "Windows only: on macOS and Linux the first window needs the main thread, which the test runner keeps.";
     }
 }

@@ -54,10 +54,10 @@ internal static partial class RustinoDllImports
     internal static extern void rustino_dtor(IntPtr instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_wait_for_exit(IntPtr instance, out IntPtr error);
+    internal static extern int rustino_wait_for_exit(RustinoWindowHandle instance, out IntPtr error);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_close(IntPtr instance);
+    internal static extern void rustino_close(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_free_string(IntPtr s);
@@ -81,122 +81,122 @@ internal static partial class RustinoDllImports
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_title(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string title);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_size(IntPtr instance, int width, int height);
+    internal static extern void rustino_set_size(RustinoWindowHandle instance, int width, int height);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_resizable(IntPtr instance, int resizable);
+    internal static extern void rustino_set_resizable(RustinoWindowHandle instance, int resizable);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_topmost(IntPtr instance, int topmost);
+    internal static extern void rustino_set_topmost(RustinoWindowHandle instance, int topmost);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_icon_file(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_center(IntPtr instance);
+    internal static extern void rustino_center(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_about_name(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_about_version(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string version);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_about_copyright(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string copyright);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_about_website(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string website);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_about_license(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string license);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_about_authors(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string authors);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_about_comments(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string comments);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_navigate_to_url(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string url);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_navigate_to_string(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string content);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_background_color(
-        IntPtr instance, byte r, byte g, byte b, byte a);
+        RustinoWindowHandle instance, byte r, byte g, byte b, byte a);
 
     // --- Pre-run only setters ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_use_os_default_size(IntPtr instance, int useDefault);
+    internal static extern int rustino_set_use_os_default_size(RustinoWindowHandle instance, int useDefault);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_devtools_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_devtools_enabled(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_clipboard_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_clipboard_enabled(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_ignore_cert_errors(IntPtr instance, int enabled);
+    internal static extern int rustino_set_ignore_cert_errors(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_web_security_enabled(IntPtr instance, int enabled);
+    internal static extern int rustino_set_web_security_enabled(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_transparent(IntPtr instance, int transparent);
+    internal static extern int rustino_set_transparent(RustinoWindowHandle instance, int transparent);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_decorations(IntPtr instance, int decorated);
+    internal static extern void rustino_set_decorations(RustinoWindowHandle instance, int decorated);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int rustino_set_user_agent(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? userAgent);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int rustino_set_user_data_folder(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? path);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_media_autoplay(IntPtr instance, int enabled);
+    internal static extern int rustino_set_media_autoplay(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_set_zoom_hotkeys(IntPtr instance, int enabled);
+    internal static extern int rustino_set_zoom_hotkeys(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int rustino_add_init_script(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string js);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int rustino_add_custom_scheme(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string scheme);
 
     // --- Custom scheme response (called from within the custom scheme callback) ---
@@ -211,66 +211,66 @@ internal static partial class RustinoDllImports
     // --- Window state ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_minimized(IntPtr instance, int minimized);
+    internal static extern void rustino_set_minimized(RustinoWindowHandle instance, int minimized);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_maximized(IntPtr instance, int maximized);
+    internal static extern void rustino_set_maximized(RustinoWindowHandle instance, int maximized);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_fullscreen(IntPtr instance, int fullscreen);
+    internal static extern void rustino_set_fullscreen(RustinoWindowHandle instance, int fullscreen);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_visible(IntPtr instance, int visible);
+    internal static extern void rustino_set_visible(RustinoWindowHandle instance, int visible);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_focus(IntPtr instance);
+    internal static extern void rustino_set_focus(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_position(IntPtr instance, int x, int y);
+    internal static extern void rustino_set_position(RustinoWindowHandle instance, int x, int y);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_min_size(IntPtr instance, int width, int height);
+    internal static extern void rustino_set_min_size(RustinoWindowHandle instance, int width, int height);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_max_size(IntPtr instance, int width, int height);
+    internal static extern void rustino_set_max_size(RustinoWindowHandle instance, int width, int height);
 
     // --- State queries ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_is_minimized(IntPtr instance);
+    internal static extern int rustino_is_minimized(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_is_maximized(IntPtr instance);
+    internal static extern int rustino_is_maximized(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int rustino_is_fullscreen(IntPtr instance);
+    internal static extern int rustino_is_fullscreen(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_get_position(IntPtr instance, out int x, out int y);
+    internal static extern void rustino_get_position(RustinoWindowHandle instance, out int x, out int y);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_get_size(IntPtr instance, out int width, out int height);
+    internal static extern void rustino_get_size(RustinoWindowHandle instance, out int width, out int height);
 
     // --- WebView operations ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_evaluate_script(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string js);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_send_web_message(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string message);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_zoom(IntPtr instance, double factor);
+    internal static extern void rustino_set_zoom(RustinoWindowHandle instance, double factor);
 
     // --- Dialogs ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr rustino_show_open_file_dialog(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? title,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? defaultPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? filters,
@@ -278,14 +278,14 @@ internal static partial class RustinoDllImports
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr rustino_show_save_file_dialog(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? title,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? defaultPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? filters);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr rustino_show_select_folder_dialog(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? title,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? defaultPath,
         int multiSelect);
@@ -301,16 +301,16 @@ internal static partial class RustinoDllImports
     // --- Monitors ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr rustino_get_monitors(IntPtr instance);
+    internal static extern IntPtr rustino_get_monitors(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr rustino_get_current_monitor(IntPtr instance);
+    internal static extern IntPtr rustino_get_current_monitor(RustinoWindowHandle instance);
 
     // --- Badge ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_badge_count(
-        IntPtr instance, int count,
+        RustinoWindowHandle instance, int count,
         byte bgR, byte bgG, byte bgB,
         byte fgR, byte fgG, byte fgB);
 
@@ -318,40 +318,40 @@ internal static partial class RustinoDllImports
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_menu(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_remove_menu(IntPtr instance);
+    internal static extern void rustino_remove_menu(RustinoWindowHandle instance);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_show_context_menu(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string json,
         double x,
         double y);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_menu_item_enabled(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string id,
         int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_menu_item_checked(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string id,
         int isChecked);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_menu_item_text(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string id,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_tray_icon(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string iconPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? tooltip,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? menuJson,
@@ -361,49 +361,49 @@ internal static partial class RustinoDllImports
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_tray_title(
-        IntPtr instance,
+        RustinoWindowHandle instance,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? title);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_remove_tray_icon(IntPtr instance);
+    internal static extern void rustino_remove_tray_icon(RustinoWindowHandle instance);
 
     // --- Callback registration ---
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_callback_context(IntPtr instance, IntPtr context);
+    internal static extern void rustino_set_callback_context(RustinoWindowHandle instance, IntPtr context);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_closing_handler(IntPtr instance, ClosingCallback handler);
+    internal static extern void rustino_set_closing_handler(RustinoWindowHandle instance, ClosingCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_closed_handler(IntPtr instance, VoidContextCallback handler);
+    internal static extern void rustino_set_closed_handler(RustinoWindowHandle instance, VoidContextCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_resized_handler(IntPtr instance, SizeCallback handler);
+    internal static extern void rustino_set_resized_handler(RustinoWindowHandle instance, SizeCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_moved_handler(IntPtr instance, PointCallback handler);
+    internal static extern void rustino_set_moved_handler(RustinoWindowHandle instance, PointCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_focus_changed_handler(IntPtr instance, IntCallback handler);
+    internal static extern void rustino_set_focus_changed_handler(RustinoWindowHandle instance, IntCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_web_message_received_handler(IntPtr instance, WebMessageCallback handler);
+    internal static extern void rustino_set_web_message_received_handler(RustinoWindowHandle instance, WebMessageCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_page_load_handler(IntPtr instance, PageLoadCallback handler);
+    internal static extern void rustino_set_page_load_handler(RustinoWindowHandle instance, PageLoadCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_navigation_handler(IntPtr instance, NavigationCallback handler);
+    internal static extern void rustino_set_navigation_handler(RustinoWindowHandle instance, NavigationCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_menu_event_handler(IntPtr instance, MenuItemCallback handler);
+    internal static extern void rustino_set_menu_event_handler(RustinoWindowHandle instance, MenuItemCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_tray_icon_event_handler(IntPtr instance, TrayIconCallback handler);
+    internal static extern void rustino_set_tray_icon_event_handler(RustinoWindowHandle instance, TrayIconCallback handler);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void rustino_set_custom_scheme_handler(IntPtr instance, CustomSchemeCallback handler);
+    internal static extern void rustino_set_custom_scheme_handler(RustinoWindowHandle instance, CustomSchemeCallback handler);
 
     // --- Splashscreen ---
 

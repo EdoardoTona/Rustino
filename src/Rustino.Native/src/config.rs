@@ -130,7 +130,44 @@ pub enum AboutField {
     Comments,
 }
 
+/// Sends messages to the host's logger, or to stderr when the host has none and asked for logs.
+/// Use it on the event loop thread, while the window runs: the host frees the log context once
+/// the window is destroyed.
+#[derive(Clone, Copy)]
+pub struct Logger {
+    callback: Option<LogCallback>,
+    context: usize,
+    verbosity: i32,
+}
+
+impl Logger {
+    pub fn warning(&self, message: &str) {
+        self.log(3, message);
+    }
+
+    pub fn error(&self, message: &str) {
+        self.log(4, message);
+    }
+
+    fn log(&self, level: i32, message: &str) {
+        if let Some(callback) = self.callback {
+            let message = std::ffi::CString::new(message.replace('\0', " ")).unwrap_or_default();
+            unsafe { callback(self.context as *const c_void, level, message.as_ptr()) };
+        } else if self.verbosity > 0 {
+            eprintln!("{message}");
+        }
+    }
+}
+
 impl WindowConfig {
+    pub fn logger(&self) -> Logger {
+        Logger {
+            callback: self.log_callback,
+            context: self.log_context as usize,
+            verbosity: self.log_verbosity,
+        }
+    }
+
     pub fn set_about(&mut self, field: AboutField, value: Option<String>) {
         match field {
             AboutField::Name => self.about_name = value,
