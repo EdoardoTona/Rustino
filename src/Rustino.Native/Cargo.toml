@@ -16,23 +16,23 @@ crate-type = ["cdylib"]
 devtools = ["wry/devtools"]
 
 [dependencies]
-tao = "0.34"
-wry = "0.55"
+tao = "0.37"
+wry = "0.57"
 image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg"] }
-rfd = "0.15"
+rfd = "0.17"
 notify-rust = "4"
-muda = "0.17"
-tray-icon = "0.22"
+muda = "0.21"
+tray-icon = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 
 # WebView2 and WebKitGTK open the web inspector through public APIs
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-wry = { version = "0.55", features = ["devtools"] }
+wry = { version = "0.57", features = ["devtools"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_System_Com",
     "Win32_Foundation",
@@ -44,7 +44,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
 ]}
-webview2-com = "0.38"
+webview2-com = "0.39"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

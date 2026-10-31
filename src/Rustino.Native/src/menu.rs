@@ -177,6 +177,14 @@ fn build_item(
         MenuItemDef::Separator => Some(Box::new(PredefinedMenuItem::separator())),
         // Native OS actions (e.g. Copy/Paste reach the focused webview); they fire no menu events
         MenuItemDef::Predefined { item, label } => {
+            // muda shows the items GTK can't run as disabled ones: leave them out instead
+            #[cfg(target_os = "linux")]
+            if !matches!(
+                item.as_str(),
+                "about" | "undo" | "redo" | "cut" | "copy" | "paste" | "select_all"
+            ) {
+                return None;
+            }
             let label = label.as_deref();
             let item = match item.as_str() {
                 "about" => PredefinedMenuItem::about(label, Some(about.clone())),

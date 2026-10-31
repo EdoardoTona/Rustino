@@ -727,9 +727,14 @@ impl WindowRuntime {
 
         // Custom scheme handlers: webview request → host response
         if let Some(cb) = callbacks.on_custom_scheme {
+            // wry wants a Send + Sync handler, but it runs it on the event loop thread, like the
+            // other callbacks: the context crosses as an address
+            let ctx = ctx as usize;
             for scheme in &config.custom_schemes {
                 webview_builder = webview_builder.with_custom_protocol(scheme.clone(), move |_id, request| {
-                    crate::invoke::webview_event(|| handle_custom_scheme(request.uri().to_string(), ctx, cb))
+                    crate::invoke::webview_event(|| {
+                        handle_custom_scheme(request.uri().to_string(), ctx as *mut std::ffi::c_void, cb)
+                    })
                 });
             }
         }
@@ -1240,10 +1245,16 @@ fn dispatch_command(
             *tray = None;
             menu_items.replace(menu::MenuOwner::Tray, Vec::new());
             if let Some(ico) = load_tray_icon(&params.icon_path) {
-                let mut builder = tray_icon::TrayIconBuilder::new()
-                    .with_icon(ico)
-                    .with_icon_as_template(params.icon_is_template)
-                    .with_menu_on_left_click(params.menu_on_left_click);
+                let builder = tray_icon::TrayIconBuilder::new();
+                #[cfg(target_os = "macos")]
+                let builder = if params.icon_is_template {
+                    builder.with_icon_templated(ico)
+                } else {
+                    builder.with_icon(ico)
+                };
+                #[cfg(not(target_os = "macos"))]
+                let builder = builder.with_icon(ico);
+                let mut builder = builder.with_menu_on_left_click(params.menu_on_left_click);
                 // The tooltip is the icon's accessible name: fall back to the window title
                 let tooltip = params.tooltip.clone().unwrap_or_else(|| window.title());
                 if !tooltip.is_empty() {

@@ -426,11 +426,11 @@ Support depends on the platform (muda):
 | Predefined item | macOS | Windows | Linux |
 |---|---|---|---|
 | `About` | OK | OK, no icon | OK |
-| `Cut`, `Copy`, `Paste`, `SelectAll` | OK | OK | X11 only¹ |
-| `Undo`, `Redo`, `Minimize`, `Maximize`, `Hide`, `CloseWindow`, `Quit` | OK | OK | omitted |
-| `Fullscreen`, `HideOthers`, `ShowAll`, `Services`, `BringAllToFront` | OK | shown, does nothing | omitted |
+| `Cut`, `Copy`, `Paste`, `SelectAll`, `Undo`, `Redo` | OK | OK | OK |
+| `Minimize`, `Maximize`, `Hide`, `CloseWindow`, `Quit` | OK | OK | omitted |
+| `Fullscreen`, `HideOthers`, `ShowAll`, `Services`, `BringAllToFront` | OK | shown disabled | omitted |
 
-"Omitted" items are not added to the menu. ¹ Clicking the item sends the shortcut through libxdo; on Wayland it does nothing (the keyboard shortcut still works in the webview).
+"Omitted" items are not added to the menu. On Linux the edit items act on the focused webview.
 
 On Windows, Ctrl+C/X/V/A/Z/Y go to the webview, which handles them natively, unless a custom item uses them: the item then replaces the native shortcut. If the menu also has the predefined item with the same shortcut (Copy, Cut, Paste, Select All, Undo, Redo), the shortcut stays with the webview.
 
