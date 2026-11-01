@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -448,6 +449,51 @@ public partial class RustinoWindow : IDisposable
     {
         SetCreationOnly(ref _userDataFolder, path, nameof(SetUserDataFolder), RustinoDllImports.rustino_set_user_data_folder);
         return this;
+    }
+
+    // Without SetUserDataFolder, WebView2 keeps its data next to the executable, in <exe>.WebView2. With
+    // `dotnet app.dll` the executable is dotnet.exe, whose folder is in Program Files and shared by every app,
+    // and an app installed in Program Files can't write there either: WebView2 then fails with "access denied".
+    // In both cases the data goes to %LOCALAPPDATA%\<app>\WebView2 instead; apps that could already write next
+    // to their executable keep their data there.
+    private static string? DefaultUserDataFolder()
+    {
+        if (!OperatingSystem.IsWindows())
+            return null;
+        return DefaultUserDataFolder(
+            Environment.ProcessPath,
+            Assembly.GetEntryAssembly()?.GetName().Name,
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            static folder =>
+            {
+                try
+                {
+                    Directory.CreateDirectory(folder);
+                    return true;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    return false;
+                }
+            });
+    }
+
+    internal static string? DefaultUserDataFolder(string? processPath, string? appName, string localAppData,
+        Func<string, bool> canCreateFolder)
+    {
+        if (string.IsNullOrEmpty(processPath) || string.IsNullOrEmpty(localAppData))
+            return null;
+
+        var exeName = Path.GetFileNameWithoutExtension(processPath);
+        var isDotnetHost = string.Equals(exeName, "dotnet", StringComparison.OrdinalIgnoreCase);
+        if (!isDotnetHost)
+        {
+            var nextToExe = Path.Combine(Path.GetDirectoryName(processPath) ?? string.Empty, exeName + ".WebView2");
+            if (canCreateFolder(nextToExe))
+                return null;
+        }
+
+        return Path.Combine(localAppData, string.IsNullOrEmpty(appName) ? exeName : appName, "WebView2");
     }
 
     public RustinoWindow SetMediaAutoplayEnabled(bool enabled)
@@ -1168,8 +1214,8 @@ public partial class RustinoWindow : IDisposable
                 RustinoDllImports.rustino_set_background_color(handle, bg.R, bg.G, bg.B, bg.A);
             if (_userAgent != null)
                 RustinoDllImports.rustino_set_user_agent(handle, _userAgent);
-            if (_userDataFolder != null)
-                RustinoDllImports.rustino_set_user_data_folder(handle, _userDataFolder);
+            if ((_userDataFolder ?? DefaultUserDataFolder()) is { } userDataFolder)
+                RustinoDllImports.rustino_set_user_data_folder(handle, userDataFolder);
             if (!_mediaAutoplay)
                 RustinoDllImports.rustino_set_media_autoplay(handle, 0);
             if (_zoomHotkeys)
