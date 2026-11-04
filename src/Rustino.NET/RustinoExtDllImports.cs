@@ -65,6 +65,9 @@ internal static partial class RustinoExtDllImports
     internal static extern void rustino_set_title_bar_overlay_color(RustinoWindowHandle instance, byte r, byte g, byte b, byte a);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_title_bar_overlay_height(RustinoWindowHandle instance, int height);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int rustino_set_drag_regions_enabled(RustinoWindowHandle instance, int enabled);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]

@@ -567,6 +567,7 @@ The platform limits below hold both before the window runs and while it runs.
 | `SetMacTitleBarStyle(MacTitleBarStyle)` | macOS: `Default`, `Transparent` or `Overlay` (no title, the page under the traffic lights, like Slack or VS Code). `SetChromeless(false)` brings the style back |
 | `SetTitleBarOverlayColor(byte, byte, byte, byte)` / `ResetTitleBarOverlayColor()` | Color of the overlay title bar buttons, over the page's CSS |
 | `SetTitleBarOverlay(bool)` | Windows, Linux: the page extends to the top of the window, under minimize, maximize and close buttons drawn by Rustino, like VS Code (see below) |
+| `SetTitleBarOverlayHeight(int)` | Height of the overlay title bar in logical pixels (0: the platform's, 32 on Windows and 40 on Linux) |
 | `SetMacTrafficLightPosition(double, double)` | macOS: position of the traffic lights, in logical pixels |
 | `SetDesktopFileName(string)` | Linux: `.desktop` file of the app, for the dock badge and progress |
 | `SetDragRegionsEnabled(bool)` | Pre-run: drag regions and edge resizing from the page (on by default, see below) |
@@ -604,7 +605,7 @@ The page lays out its own title bar in the room left by the buttons, with CSS va
 
 ```css
 header {
-  height: var(--rustino-titlebar-height, 32px);   /* 32px on Windows, 40px on Linux */
+  height: var(--rustino-titlebar-height, 32px);   /* SetTitleBarOverlayHeight, by default 32px on Windows, 40px on Linux */
   padding-left: var(--rustino-window-controls-left, 0px);
   padding-right: var(--rustino-window-controls-right, 0px);
 }
@@ -621,6 +622,8 @@ The safe area of the title bar, the strip free of buttons, has the variables of 
   height: var(--rustino-titlebar-area-height, 32px);
 }
 ```
+
+`SetTitleBarOverlayHeight(48)` makes the title bar taller, for instance for tabs or a search box: on Windows the buttons stretch to the new height, like the caption buttons of VS Code, on Linux the round buttons stay centered, and the variables follow. On macOS the page draws its title bar at the height it wants under `MacTitleBarStyle.Overlay`, and `SetMacTrafficLightPosition` centers the traffic lights in it.
 
 The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`), and on Windows 11 the Snap Layouts flyout doesn't open from the maximize button (Win+Z still works). On macOS the option is ignored: use `SetMacTitleBarStyle(MacTitleBarStyle.Overlay)`.
 

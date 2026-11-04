@@ -19,6 +19,7 @@ public partial class RustinoWindow
     private MacTitleBarStyle _macTitleBarStyle;
     private bool _titleBarOverlay;
     private (byte R, byte G, byte B, byte A)? _titleBarOverlayColor;
+    private int _titleBarOverlayHeight;
     private (double X, double Y)? _trafficLightPosition;
     private string? _desktopFileName;
     private bool _dragRegions = true;
@@ -285,6 +286,22 @@ public partial class RustinoWindow
     }
 
     /// <summary>
+    /// Height of the overlay title bar (<see cref="SetTitleBarOverlay"/>) in logical pixels, also while the window
+    /// runs: the buttons stretch to it and <c>--rustino-titlebar-height</c> follows. 0 goes back to the platform's
+    /// height, 32 on Windows and 40 on Linux. On macOS center the traffic lights with
+    /// <see cref="SetMacTrafficLightPosition"/>.
+    /// </summary>
+    public RustinoWindow SetTitleBarOverlayHeight(int height)
+    {
+        ThrowIfDisposed();
+        ArgumentOutOfRangeException.ThrowIfNegative(height);
+        _titleBarOverlayHeight = height;
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_title_bar_overlay_height(handle, height);
+        return this;
+    }
+
+    /// <summary>
     /// Elements with <c>data-rustino-drag-region</c> move the window, and on Windows and Linux the edges of the
     /// page resize chromeless windows (on by default). Any loaded page can use them: turn them off when the window
     /// shows untrusted pages. Must be called before <see cref="WaitForClose"/>.
@@ -369,6 +386,8 @@ public partial class RustinoWindow
             RustinoExtDllImports.rustino_set_title_bar_overlay(handle, 1);
         if (_titleBarOverlayColor is { } color)
             RustinoExtDllImports.rustino_set_title_bar_overlay_color(handle, color.R, color.G, color.B, color.A);
+        if (_titleBarOverlayHeight > 0)
+            RustinoExtDllImports.rustino_set_title_bar_overlay_height(handle, _titleBarOverlayHeight);
         if (_trafficLightPosition is { } lights)
             RustinoExtDllImports.rustino_set_traffic_light_position(handle, lights.X, lights.Y);
         if (_desktopFileName != null)

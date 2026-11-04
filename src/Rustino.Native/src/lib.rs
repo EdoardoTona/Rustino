@@ -1130,6 +1130,17 @@ pub unsafe extern "C" fn rustino_set_title_bar_overlay_color(
     };
 }
 
+/// Height of the overlay title bar in logical pixels; 0 or less goes back to the platform's
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_title_bar_overlay_height(instance: *mut RustinoWindow, height: i32) {
+    let height = u32::try_from(height).ok().filter(|&h| h > 0);
+    unsafe {
+        set_window_feature(instance, window_ext::WindowCommand::SetTitleBarOverlayHeight(height), |o| {
+            o.title_bar_overlay_height = height
+        })
+    };
+}
+
 /// Pre-run only: 0 once the window started. Without drag regions no page can move, resize or
 /// maximize the window through the `__rustino:` messages, which reach the host instead.
 #[unsafe(no_mangle)]

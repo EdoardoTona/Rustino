@@ -33,7 +33,8 @@ const RESIZE_BORDER: u32 = 6;
 /// `setState` (0 when the OS resizes the window or it can't be resized).
 ///
 /// With the overlay title bar (Windows and Linux) `setState` also gets the window controls, which
-/// the script draws in the top corners, in a shadow root, and the page makes room for them with
+/// the script draws in the top corners, in a shadow root, as high as the title bar height set by
+/// the host (the platform's by default), and the page makes room for them with
 /// `--rustino-titlebar-height`, `--rustino-window-controls-left` and `--rustino-window-controls-right`.
 /// The color of the buttons follows `prefers-color-scheme`, `--rustino-window-controls-color` and,
 /// over both, the color set by the host.
@@ -106,7 +107,7 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
     windows: { height: 32, css: COLOR +
       ':host{position:fixed;top:0;z-index:2147483647;display:flex;user-select:none;' +
       "font:10px 'Segoe Fluent Icons','Segoe MDL2 Assets'}" +
-      'button{all:unset;width:46px;height:32px;display:flex;align-items:center;justify-content:center}' +
+      'button{all:unset;width:46px;height:100%;display:flex;align-items:center;justify-content:center}' +
       'button:hover{background:rgba(128,128,128,.2)}button:active{background:rgba(128,128,128,.3)}' +
       'button.close:hover,button.close:active{background:#c42b1c;color:#fff}' +
       'button:disabled{background:none;color:inherit;opacity:.35}' },
@@ -124,6 +125,7 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
   const renderControls = (controls) => {
     const root = document.documentElement;
     const style = controls && STYLES[controls.platform];
+    const height = style && (controls.height || style.height);
     const widths = { left: 0, right: 0 };
     for (const side of ['left', 'right']) {
       const buttons = style ? controls[side] : [];
@@ -151,6 +153,7 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
           LABELS[icon] + '" title="' + LABELS[icon] + '"' + (b.enabled ? '' : ' disabled') + '>' + content + '</button>';
       }).join('');
       host.style.color = controls.color || '';
+      host.style.height = height + 'px';
       if (!host.isConnected) root.appendChild(host);
       widths[side] = host.offsetWidth;
       root.style.setProperty(property, widths[side] + 'px');
@@ -158,11 +161,11 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
     // Safe area of the title bar: the strip free of window controls, as the titlebar-area-*
     // environment variables of the Window Controls Overlay
     const area = style && {
-      '--rustino-titlebar-height': style.height + 'px',
+      '--rustino-titlebar-height': height + 'px',
       '--rustino-titlebar-area-x': widths.left + 'px',
       '--rustino-titlebar-area-y': '0px',
       '--rustino-titlebar-area-width': 'calc(100vw - ' + (widths.left + widths.right) + 'px)',
-      '--rustino-titlebar-area-height': style.height + 'px',
+      '--rustino-titlebar-area-height': height + 'px',
     };
     for (const name of ['--rustino-titlebar-height', '--rustino-titlebar-area-x', '--rustino-titlebar-area-y',
       '--rustino-titlebar-area-width', '--rustino-titlebar-area-height']) {
@@ -220,6 +223,8 @@ struct WindowControls {
     maximized: bool,
     /// CSS color set by the host, over the page's
     color: Option<String>,
+    /// Title bar height set by the host, in CSS pixels; `None` keeps the platform's
+    height: Option<u32>,
     left: Vec<ControlButton>,
     right: Vec<ControlButton>,
 }
@@ -252,6 +257,9 @@ pub struct WindowExtOptions {
     pub title_bar_overlay: bool,
     /// Color of the overlay title bar buttons (RGBA); `None` follows the page
     pub title_bar_overlay_color: Option<(u8, u8, u8, u8)>,
+    /// Height of the overlay title bar in logical pixels; `None` keeps the platform's (32 on
+    /// Windows, 40 on GNOME)
+    pub title_bar_overlay_height: Option<u32>,
     pub desktop_file_name: Option<String>,
     /// Off for apps that load untrusted pages: every page can send the script's messages
     pub drag_regions: bool,
@@ -274,6 +282,7 @@ impl Default for WindowExtOptions {
             traffic_light_position: None,
             title_bar_overlay: false,
             title_bar_overlay_color: None,
+            title_bar_overlay_height: None,
             desktop_file_name: None,
             drag_regions: true,
         }
@@ -315,6 +324,7 @@ pub enum WindowCommand {
     SetTrafficLightPosition(f64, f64),
     SetTitleBarOverlay(bool),
     SetTitleBarOverlayColor(Option<(u8, u8, u8, u8)>),
+    SetTitleBarOverlayHeight(Option<u32>),
     SetDesktopFileName(Option<String>),
     /// Deliver URL arguments through the registered `UrlsOpened` callback.
     DeliverUrls(Vec<String>),
@@ -440,6 +450,7 @@ impl WindowExt {
             decorated,
             title_bar_overlay: self.options.title_bar_overlay,
             title_bar_overlay_color: self.options.title_bar_overlay_color,
+            title_bar_overlay_height: self.options.title_bar_overlay_height,
             chrome: None,
             chrome_dirty: false,
             #[cfg(target_os = "macos")]
@@ -496,6 +507,8 @@ pub struct WindowExtRuntime {
     title_bar_overlay: bool,
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     title_bar_overlay_color: Option<(u8, u8, u8, u8)>,
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    title_bar_overlay_height: Option<u32>,
     /// Chrome state last sent to the page
     chrome: Option<ChromeState>,
     /// The window state changed: check the chrome state once the pending events are handled
@@ -685,6 +698,10 @@ impl WindowExtRuntime {
                 self.title_bar_overlay_color = color;
                 self.chrome_dirty = true;
             }
+            WindowCommand::SetTitleBarOverlayHeight(height) => {
+                self.title_bar_overlay_height = height;
+                self.chrome_dirty = true;
+            }
             #[allow(unused_variables)]
             WindowCommand::SetDesktopFileName(name) => {
                 #[cfg(target_os = "linux")]
@@ -763,6 +780,7 @@ impl WindowExtRuntime {
                 _ => self.closable,
             };
             let maximized = window.is_maximized();
+            let height = self.title_bar_overlay_height;
             let color = self
                 .title_bar_overlay_color
                 .map(|(r, g, b, a)| format!("rgba({r},{g},{b},{})", f64::from(a) / 255.0));
@@ -776,7 +794,14 @@ impl WindowExtRuntime {
                     &["close"]
                 };
                 let right = kinds.iter().map(|&kind| ControlButton { kind, enabled: enabled(kind) });
-                WindowControls { platform: "windows", maximized, color, left: Vec::new(), right: right.collect() }
+                WindowControls {
+                    platform: "windows",
+                    maximized,
+                    color,
+                    height,
+                    left: Vec::new(),
+                    right: right.collect(),
+                }
             };
             // GTK places the buttons of the decoration layout and hides the disabled ones
             #[cfg(target_os = "linux")]
@@ -789,7 +814,14 @@ impl WindowExtRuntime {
                         .map(|kind| ControlButton { kind, enabled: true })
                         .collect()
                 };
-                WindowControls { platform: "gnome", maximized, color, left: buttons(left), right: buttons(right) }
+                WindowControls {
+                    platform: "gnome",
+                    maximized,
+                    color,
+                    height,
+                    left: buttons(left),
+                    right: buttons(right),
+                }
             };
             Some(controls)
         }
@@ -1234,13 +1266,14 @@ mod tests {
                 platform: "windows",
                 maximized: true,
                 color: Some("rgba(224,224,224,1)".into()),
+                height: Some(48),
                 left: Vec::new(),
                 right: vec![ControlButton { kind: "close", enabled: false }],
             }),
         };
         assert_eq!(
             serde_json::to_string(&chrome).unwrap(),
-            r#"{"border":6,"controls":{"platform":"windows","maximized":true,"color":"rgba(224,224,224,1)","left":[],"right":[{"kind":"close","enabled":false}]}}"#
+            r#"{"border":6,"controls":{"platform":"windows","maximized":true,"color":"rgba(224,224,224,1)","height":48,"left":[],"right":[{"kind":"close","enabled":false}]}}"#
         );
     }
 
