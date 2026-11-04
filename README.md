@@ -265,7 +265,9 @@ if (status == AutoStartStatus.DisabledBySystem)   // macOS: Login Items keeps it
 | `Unsupported` | No start at login here (a Flatpak sandbox) |
 
 `Status` reads the system on each call. `StatusChanged` (and `WhenStatusChanged`) reports the changes of `Enable`,
-`Disable` and the system: once someone listens, the system is checked every `AutoStartOptions.PollInterval` (2 s).
+`Disable` and the system: once someone listens, the system is checked every `AutoStartOptions.PollInterval` (2 s). An
+exception thrown by a handler or observer doesn't stop the others nor the checks, and doesn't reach `Enable` or
+`Disable`: it raises `UnhandledException`.
 
 The launch at login gets `--autostart` (`RustinoAutoStart.LaunchArgument`) after the arguments of
 `AutoStartOptions.Arguments`, so the app can decide what to show: for instance only the tray icon, and the window

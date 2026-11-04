@@ -50,4 +50,29 @@ public class AutoStartTests
 
     [Fact]
     public void TheTestHostWasNotLaunchedAtLogin() => Assert.False(RustinoAutoStart.WasLaunchedAtLogin);
+
+    [Fact]
+    public void ThrowingSubscribersAreReportedAndTheOthersStillRun()
+    {
+        using var autoStart = new RustinoAutoStart("it.ortarzo.rustino.unusedtestid");
+        var reported = new List<Exception>();
+        var received = new List<AutoStartStatus>();
+        autoStart.UnhandledException += (_, e) => reported.Add(e.Exception);
+        autoStart.StatusChanged += (_, _) => throw new InvalidOperationException("handler");
+        autoStart.StatusChanged += (_, status) => received.Add(status);
+        using var subscription = autoStart.WhenStatusChanged.Subscribe(new ThrowingObserver());
+
+        // Subscribing read the real status (no entry: Disabled), so this is a change
+        autoStart.Update(AutoStartStatus.DisabledBySystem);
+
+        Assert.Equal([AutoStartStatus.DisabledBySystem], received);
+        Assert.Equal(["handler", "observer"], reported.Select(e => e.Message));
+    }
+
+    private sealed class ThrowingObserver : IObserver<AutoStartStatus>
+    {
+        public void OnNext(AutoStartStatus value) => throw new InvalidOperationException("observer");
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
+    }
 }

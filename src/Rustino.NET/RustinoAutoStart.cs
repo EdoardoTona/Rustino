@@ -17,6 +17,12 @@ public enum AutoStartStatus
     DisabledBySystem,
 }
 
+/// <summary>An exception thrown by a <see cref="RustinoAutoStart.StatusChanged"/> handler or observer.</summary>
+public sealed class AutoStartExceptionEventArgs(Exception exception) : EventArgs
+{
+    public Exception Exception { get; } = exception;
+}
+
 /// <summary>Options for <see cref="RustinoAutoStart"/>.</summary>
 public sealed class AutoStartOptions
 {
@@ -61,9 +67,13 @@ public sealed class RustinoAutoStart : IDisposable
     private readonly TimeSpan _pollInterval;
     private readonly EventObservable<AutoStartStatus> _statusChangedObs = new();
     private EventHandler<AutoStartStatus>? _statusChanged;
+    private EventHandler<AutoStartExceptionEventArgs>? _unhandledException;
     private AutoStartStatus? _lastStatus;
     private Timer? _timer;
     private bool _disposed;
+
+    // The native library may load before any window: from runtimes/<rid>/native too
+    static RustinoAutoStart() => NativeLibraryResolver.EnsureRegistered();
 
     /// <param name="appId">
     /// Names the entry: letters, digits, '.', '-' and '_', such as <c>com.example.MyApp</c>. The same id finds the
@@ -130,6 +140,17 @@ public sealed class RustinoAutoStart : IDisposable
         }
     }
 
+    /// <summary>
+    /// A <see cref="StatusChanged"/> handler or a <see cref="WhenStatusChanged"/> observer threw: the exception
+    /// doesn't reach the polling thread, which would end the process, nor <see cref="Enable"/> and
+    /// <see cref="Disable"/>. Exceptions thrown here are dropped.
+    /// </summary>
+    public event EventHandler<AutoStartExceptionEventArgs>? UnhandledException
+    {
+        add { lock (_gate) _unhandledException += value; }
+        remove { lock (_gate) _unhandledException -= value; }
+    }
+
     /// <summary>The values of <see cref="StatusChanged"/>; subscribing starts the checks too.</summary>
     public IObservable<AutoStartStatus> WhenStatusChanged => new PollingObservable(this);
 
@@ -179,6 +200,7 @@ public sealed class RustinoAutoStart : IDisposable
             timer = _timer;
             _timer = null;
             _statusChanged = null;
+            _unhandledException = null;
         }
         timer?.Dispose();
         _statusChangedObs.Complete();
@@ -219,10 +241,11 @@ public sealed class RustinoAutoStart : IDisposable
     {
         lock (_gate)
             if (_disposed) return;
-        Update(ToStatus(RustinoDllImports.rustino_autostart_status(AppId)));
+        try { Update(ToStatus(RustinoDllImports.rustino_autostart_status(AppId))); }
+        catch (Exception exception) { ReportException(exception); }
     }
 
-    private AutoStartStatus Update(AutoStartStatus status)
+    internal AutoStartStatus Update(AutoStartStatus status)
     {
         EventHandler<AutoStartStatus>? handlers;
         lock (_gate)
@@ -234,9 +257,29 @@ public sealed class RustinoAutoStart : IDisposable
             if (!changed || _disposed) return status;
             handlers = _statusChanged;
         }
-        handlers?.Invoke(this, status);
-        _statusChangedObs.Emit(status);
+        // Every handler and observer gets the status even when one throws
+        if (handlers != null)
+            foreach (EventHandler<AutoStartStatus> handler in handlers.GetInvocationList())
+            {
+                try { handler(this, status); }
+                catch (Exception exception) { ReportException(exception); }
+            }
+        try { _statusChangedObs.Emit(status); }
+        catch (Exception exception) { ReportException(exception); }
         return status;
+    }
+
+    private void ReportException(Exception exception)
+    {
+        EventHandler<AutoStartExceptionEventArgs>? handlers;
+        lock (_gate) handlers = _unhandledException;
+        if (handlers is null) return;
+        var args = new AutoStartExceptionEventArgs(exception);
+        foreach (EventHandler<AutoStartExceptionEventArgs> handler in handlers.GetInvocationList())
+        {
+            try { handler(this, args); }
+            catch { /* nowhere left to report it */ }
+        }
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
