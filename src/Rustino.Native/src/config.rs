@@ -65,6 +65,8 @@ pub struct WindowConfig {
     /// The key of the parent window, which must run when this one starts
     pub parent: Option<usize>,
     pub modal: bool,
+    /// Registered when the window starts
+    pub global_shortcuts: Vec<String>,
 
     pub about_name: Option<String>,
     pub about_version: Option<String>,
@@ -112,6 +114,7 @@ impl Default for WindowConfig {
             custom_schemes: Vec::new(),
             parent: None,
             modal: false,
+            global_shortcuts: Vec::new(),
             about_name: None,
             about_version: None,
             about_copyright: None,

@@ -103,4 +103,32 @@ internal static partial class RustinoExtDllImports
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int rustino_set_modal(RustinoWindowHandle instance, int modal);
+
+    // --- Global shortcuts ---
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_register_global_shortcut(RustinoWindowHandle instance, [MarshalAs(UnmanagedType.LPUTF8Str)] string accelerator);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_unregister_global_shortcut(RustinoWindowHandle instance, [MarshalAs(UnmanagedType.LPUTF8Str)] string accelerator);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_unregister_all_global_shortcuts(RustinoWindowHandle instance);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_is_global_shortcut_registered(RustinoWindowHandle instance, [MarshalAs(UnmanagedType.LPUTF8Str)] string accelerator);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_global_shortcut_handler(RustinoWindowHandle instance, StringCallback handler);
+
+    // --- Screen ---
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_get_cursor_position(RustinoWindowHandle instance, out int x, out int y);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_check_monitors(RustinoWindowHandle instance);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_monitors_handler(RustinoWindowHandle instance, StringCallback handler);
 }

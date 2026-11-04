@@ -20,6 +20,10 @@ pub struct RustinoCallbacks {
     /// (button, x, y): 0 left, 1 right, 2 middle; cursor position in physical pixels
     pub on_tray_icon_clicked: Option<unsafe extern "C" fn(*mut c_void, i32, i32, i32)>,
     pub on_custom_scheme: Option<unsafe extern "C" fn(*mut c_void, *const c_char, *mut SchemeResponse)>,
+    /// (accelerator): a global shortcut of the window, as the host registered it
+    pub on_global_shortcut: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+    /// (monitors JSON): the monitors, each time the host checks them
+    pub on_monitors: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
 }
 
 impl Default for RustinoCallbacks {
@@ -37,6 +41,8 @@ impl Default for RustinoCallbacks {
             on_menu_item_clicked: None,
             on_tray_icon_clicked: None,
             on_custom_scheme: None,
+            on_global_shortcut: None,
+            on_monitors: None,
         }
     }
 }
@@ -60,6 +66,8 @@ mod tests {
         assert!(cb.on_menu_item_clicked.is_none());
         assert!(cb.on_tray_icon_clicked.is_none());
         assert!(cb.on_custom_scheme.is_none());
+        assert!(cb.on_global_shortcut.is_none());
+        assert!(cb.on_monitors.is_none());
     }
 
     #[test]

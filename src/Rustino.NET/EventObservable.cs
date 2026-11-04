@@ -27,6 +27,11 @@ internal sealed class EventObservable<T> : IObservable<T>, ICompletable
         return new Unsubscriber(this, observer);
     }
 
+    internal bool HasObservers
+    {
+        get { lock (_lock) return _observers.Count > 0; }
+    }
+
     // Every observer gets the value even when one throws; the exceptions are thrown afterwards
     internal void Emit(T value)
     {

@@ -83,6 +83,52 @@ public class MonitorInfo
         $"{Name ?? "Unknown"} ({Width}x{Height} at {X},{Y}, {ScaleFactor:F2}x{(IsPrimary ? ", primary" : "")})";
 }
 
+/// <summary>
+/// The monitors after a change, and what changed. Monitors are matched by name (those with the same name, e.g. of
+/// the same model, also by bounds): a monitor that kept its name but changed its bounds, scale factor or primary
+/// status is in <see cref="Changed"/>.
+/// </summary>
+public class MonitorsChangedEventArgs(MonitorInfo[] monitors, MonitorInfo[] added, MonitorInfo[] removed, MonitorInfo[] changed) : EventArgs
+{
+    public MonitorInfo[] Monitors { get; } = monitors;
+    public MonitorInfo[] Added { get; } = added;
+    public MonitorInfo[] Removed { get; } = removed;
+    public MonitorInfo[] Changed { get; } = changed;
+
+    // Null when nothing changed. Identical monitors are paired first, then the others by name, one to one, so that
+    // monitors of the same model (same name) are told apart by their bounds.
+    internal static MonitorsChangedEventArgs? Compare(MonitorInfo[] previous, MonitorInfo[] current)
+    {
+        var unpaired = previous.ToList();
+        var rest = new List<MonitorInfo>();
+        foreach (var monitor in current)
+        {
+            var index = unpaired.FindIndex(p => p.Name == monitor.Name && SameMetrics(p, monitor));
+            if (index >= 0) unpaired.RemoveAt(index);
+            else rest.Add(monitor);
+        }
+        var added = new List<MonitorInfo>();
+        var changed = new List<MonitorInfo>();
+        foreach (var monitor in rest)
+        {
+            var index = unpaired.FindIndex(p => p.Name == monitor.Name);
+            if (index >= 0)
+            {
+                unpaired.RemoveAt(index);
+                changed.Add(monitor);
+            }
+            else added.Add(monitor);
+        }
+        if (added.Count == 0 && changed.Count == 0 && unpaired.Count == 0)
+            return null;
+        return new MonitorsChangedEventArgs(current, [.. added], [.. unpaired], [.. changed]);
+    }
+
+    private static bool SameMetrics(MonitorInfo a, MonitorInfo b) =>
+        a.X == b.X && a.Y == b.Y && a.Width == b.Width && a.Height == b.Height
+        && a.ScaleFactor == b.ScaleFactor && a.IsPrimary == b.IsPrimary;
+}
+
 [JsonSerializable(typeof(MonitorInfo))]
 [JsonSerializable(typeof(MonitorInfo[]))]
 internal partial class MonitorJsonContext : JsonSerializerContext;

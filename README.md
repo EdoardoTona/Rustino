@@ -627,6 +627,43 @@ window.SetPosition(
 
 `MonitorInfo` properties: `Name`, `X`, `Y`, `Width`, `Height`, `ScaleFactor`, `IsPrimary`.
 
+`MonitorsChanged` reports monitors added, removed, or with new bounds, scale factor or primary status
+(`MonitorsChangedEventArgs`: `.Monitors`, `.Added`, `.Removed`, `.Changed`, matched by name, and by bounds between monitors of the same model). The platforms
+don't tell the webview layer about these changes, so while a handler or an observer of `WhenMonitorsChanged` is
+attached the window compares the monitors every second.
+
+```csharp
+window.MonitorsChanged += (_, e) =>
+{
+    foreach (var m in e.Removed) Console.WriteLine($"Disconnected: {m.Name}");
+    if (window.GetCurrentMonitor() is null) window.Center();
+};
+
+// Cursor position on the screen, in physical pixels (null before the window runs; 0, 0 on Wayland)
+if (window.GetCursorPosition() is var (x, y)) Console.WriteLine($"{x}, {y}");
+```
+
+### Global Shortcuts
+
+A global shortcut reaches the app even while another app has the focus. It belongs to the window that registers
+it, raises that window's `GlobalShortcutPressed` (with the accelerator as it was registered), and is released when
+the window closes. Accelerators use the syntax of the menu accelerators (`CmdOrCtrl+Shift+K`, `Alt+F4`, `Super+Space`).
+
+```csharp
+window.GlobalShortcutPressed += (_, accelerator) => window.Activate();
+if (!window.RegisterGlobalShortcut("CmdOrCtrl+Shift+Space"))
+    Console.WriteLine("Invalid, or another app has it");
+```
+
+| Method | Description |
+|---|---|
+| `RegisterGlobalShortcut(string)` | `false` when the accelerator is invalid or another window or app has it. Before the window runs it's registered when the window starts, and only an invalid accelerator returns `false` |
+| `UnregisterGlobalShortcut(string)` | `false` when the window hadn't registered it |
+| `UnregisterAllGlobalShortcuts()` | Releases every shortcut of the window |
+| `IsGlobalShortcutRegistered(string)` | Whether the running window registered it |
+
+On Linux global shortcuts need X11: without an X11 display `RegisterGlobalShortcut` returns `false`, and in a Wayland session (through XWayland) they don't reach the app while a Wayland window has the focus.
+
 ### Native Window Features
 
 ```csharp
@@ -806,6 +843,7 @@ On Windows, WebView2 applies `SetCookie` and `DeleteCookie` a moment later: a `G
 | `GetSize()` | Returns `(Width, Height)` size |
 | `GetMonitors()` | Returns all connected `MonitorInfo[]` |
 | `GetCurrentMonitor()` | Returns `MonitorInfo?` for the monitor containing the window |
+| `GetCursorPosition()` | Returns the cursor's `(X, Y)` on the screen in physical pixels, `null` before the window runs |
 
 ### Events
 
@@ -824,6 +862,8 @@ On Windows, WebView2 applies `SetCookie` and `DeleteCookie` a moment later: a `G
 | `MenuItemClicked` | `string` | Fired when a menu item is clicked (the item's ID) |
 | `MenuItemCheckedChanged` | `MenuItemCheckedEventArgs` | Fired after `MenuItemClicked` when the user toggles a check item (`.Id`, `.IsChecked`) |
 | `TrayIconClicked` | `TrayIconClickedEventArgs` | Fired once per click on the tray icon (`.Button`, `.X`, `.Y`); never on Linux |
+| `GlobalShortcutPressed` | `string` | A [global shortcut](#global-shortcuts) of the window was pressed (the accelerator as registered) |
+| `MonitorsChanged` | `MonitorsChangedEventArgs` | A monitor was added, removed or changed (see [Monitors](#monitors)) |
 | `FileDrop` | `FileDropEventArgs` | Files dragged over the window and dropped, with their full paths (`.Type`, `.Paths`, `.X`, `.Y`); needs `SetFileDropEnabled(true)` |
 | `DocumentTitleChanged` | `string` | The page's `<title>` changed |
 | `DownloadStarting` | `DownloadStartingEventArgs` | A download starts (`.Url`, `.SuggestedPath`; set `.DestinationPath` or `.Cancel`) |
@@ -852,6 +892,8 @@ All events are also available as `IObservable<T>` properties for reactive progra
 | `WhenMenuItemClicked` | `IObservable<string>` | Menu item click stream |
 | `WhenMenuItemCheckedChanged` | `IObservable<MenuItemCheckedEventArgs>` | Check item toggle stream |
 | `WhenTrayIconClicked` | `IObservable<TrayIconClickedEventArgs>` | Tray icon click stream |
+| `WhenGlobalShortcutPressed` | `IObservable<string>` | Global shortcut stream |
+| `WhenMonitorsChanged` | `IObservable<MonitorsChangedEventArgs>` | Monitor changes stream |
 | `WhenFileDrop` | `IObservable<FileDropEventArgs>` | File drag and drop stream |
 | `WhenDocumentTitleChanged` | `IObservable<string>` | Document title stream |
 | `WhenDownloadStarting` | `IObservable<DownloadStartingEventArgs>` | Download start stream |

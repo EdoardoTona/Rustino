@@ -1043,6 +1043,7 @@ public partial class RustinoWindow : IDisposable
             _runStarted = true;
         }
 
+        StartMonitorsPolling();
         try
         {
             int status;
@@ -1073,6 +1074,7 @@ public partial class RustinoWindow : IDisposable
         }
         finally
         {
+            StopMonitorsPolling();
             Instances.TryRemove(new KeyValuePair<IntPtr, RustinoWindow>(nativeHandle.Key, this));
             if (addedRef)
                 nativeHandle.DangerousRelease();

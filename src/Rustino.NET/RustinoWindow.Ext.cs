@@ -442,10 +442,13 @@ public partial class RustinoWindow
         RustinoExtDllImports.rustino_set_scale_factor_changed_handler(handle, ScaleFactorChangedCb);
         RustinoExtDllImports.rustino_set_urls_opened_handler(handle, UrlsOpenedCb);
         RustinoExtDllImports.rustino_set_reopen_handler(handle, ReopenCb);
+        RustinoExtDllImports.rustino_set_global_shortcut_handler(handle, GlobalShortcutCb);
+        RustinoExtDllImports.rustino_set_monitors_handler(handle, MonitorsCb);
     }
 
     // Completed by CompleteAllObservables
-    private ICompletable[] ExtObservables => [_themeChangedObs, _scaleFactorChangedObs, _urlsOpenedObs, _reopenedObs];
+    private ICompletable[] ExtObservables =>
+        [_themeChangedObs, _scaleFactorChangedObs, _urlsOpenedObs, _reopenedObs, _globalShortcutPressedObs, _monitorsChangedObs];
 
     private static void OnThemeChangedNative(IntPtr ctx, int theme) => GuardNativeCallback(ctx, nameof(OnThemeChangedNative), w =>
     {

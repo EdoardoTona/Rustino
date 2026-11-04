@@ -56,6 +56,8 @@ pub enum RustinoCommand {
     GetCurrentMonitor(mpsc::Sender<String>),
 
     MenuEventFired(muda::MenuId),
+    /// The id of a global shortcut, which only the window that registered it handles
+    GlobalShortcutPressed(u32),
     TrayIconButton {
         id: tray_icon::TrayIconId,
         button: tray_icon::MouseButton,

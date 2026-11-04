@@ -338,6 +338,24 @@ impl RustinoWindow {
         matches!(self.setup().phase, Phase::Running(_))
     }
 
+    /// Gives the monitors to the host's handler, from the event loop, while the window runs: the
+    /// host compares them to tell when a monitor is added or removed, which tao doesn't report.
+    pub fn check_monitors(&self) {
+        let callbacks = self.setup().callbacks;
+        let Some(cb) = callbacks.on_monitors else {
+            return;
+        };
+        // The context crosses as an address: the task runs on the event loop thread
+        let context = callbacks.context as usize;
+        let state = Arc::clone(&self.state);
+        self.send_to_running(RustinoCommand::Invoke(crate::invoke::Task::new(move |window, _| {
+            update_monitor_cache(window, &state);
+            if let Ok(monitors) = CString::new(state.load_monitors()) {
+                unsafe { cb(context as *mut std::ffi::c_void, monitors.as_ptr()) };
+            }
+        })));
+    }
+
     /// Takes the configuration for `run`: a window runs once. The caller of `run` must `release`
     /// the instance afterwards.
     pub fn start(&self) -> Result<Started, String> {
@@ -513,6 +531,7 @@ struct WindowRuntime {
     current_menu: Option<muda::Menu>,
     tray: Option<Tray>,
     _menu_events: EventLoopRegistration,
+    _global_shortcuts: crate::global_shortcuts::Owner,
     /// Keeps the window and the webview reachable from `invoke`
     _running: crate::invoke::RunningGuard,
     // Dropped before the window
@@ -801,6 +820,11 @@ impl WindowRuntime {
         let (window, webview) = (Rc::new(window), Rc::new(webview));
         let running = crate::invoke::register_running(key, &window, &webview);
         let parent = parent.map(|parent| crate::parent::attach(&window, &parent, config.modal));
+        for accelerator in &config.global_shortcuts {
+            if let Err(message) = crate::global_shortcuts::register(key, accelerator) {
+                config.logger().warning(&message);
+            }
+        }
 
         // Initialize shared state from actual window
         let size = window.inner_size();
@@ -849,6 +873,7 @@ impl WindowRuntime {
             current_menu,
             tray: None,
             _menu_events: menu_events,
+            _global_shortcuts: crate::global_shortcuts::Owner(key),
             _running: running,
             _parent: parent,
             webview,
@@ -860,6 +885,16 @@ impl WindowRuntime {
 
     /// Handles an event of this window. Returns true when the window closes.
     fn handle(&mut self, event: Event<'_, RustinoCommand>, target: &EventLoopWindowTarget<Wake>) -> bool {
+        if let Event::UserEvent(RustinoCommand::GlobalShortcutPressed(id)) = event {
+            if let (Some(cb), Some(accelerator)) = (
+                self.callbacks.on_global_shortcut,
+                crate::global_shortcuts::accelerator(self.key, id),
+            ) && let Ok(accelerator) = CString::new(accelerator)
+            {
+                unsafe { cb(self.callbacks.context, accelerator.as_ptr()) };
+            }
+            return false;
+        }
         let Some(event) = self.ext.handle_event(event, target, &self.window, &self.webview) else {
             return false;
         };
@@ -1041,7 +1076,7 @@ fn close_window(windows: &mut Vec<WindowRuntime>, key: usize) {
     }
 }
 
-fn send_to_event_loops(command: impl Fn() -> RustinoCommand) {
+pub(crate) fn send_to_event_loops(command: impl Fn() -> RustinoCommand) {
     if let Ok(loops) = EVENT_LOOPS.lock() {
         for (_, proxy) in loops.iter() {
             let _ = proxy.send_event(command());
@@ -1352,6 +1387,8 @@ fn dispatch_command(
             update_monitor_cache(window, state);
             let _ = tx.send(state.load_current_monitor());
         }
+        // Handled by WindowRuntime::handle
+        RustinoCommand::GlobalShortcutPressed(_) => {}
         RustinoCommand::Close => return true,
     }
     false
