@@ -20,6 +20,7 @@ mod icon;
 mod invoke;
 mod menu;
 mod parent;
+mod safe_storage;
 mod splash;
 mod state;
 mod util;

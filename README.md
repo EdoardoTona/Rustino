@@ -331,6 +331,40 @@ The entry points to the executable that called `Enable()`. If an update moves th
 refresh it at startup without overriding the user's choice: `if (autoStart.Status == AutoStartStatus.Enabled)
 autoStart.Enable();`. `Disable()` removes the entry; disposing the object only stops the checks.
 
+### Safe storage
+
+`RustinoSafeStorage` encrypts the app's secrets (tokens, passwords) so that only the current user can decrypt them,
+and the app keeps the bytes in its own files:
+
+```csharp
+var storage = new RustinoSafeStorage("com.company.product");
+var file = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MyApp", "token.bin");
+
+if (storage.IsEncryptionAvailable)
+    File.WriteAllBytes(file, storage.EncryptString(token));
+
+var token = storage.DecryptString(File.ReadAllBytes(file));   // CryptographicException: not ours, or altered
+
+storage.ResetKey();   // sign out: the old bytes no longer decrypt (macOS, Linux)
+```
+
+| Platform | How |
+|---|---|
+| Windows | DPAPI of the user (`CryptProtectData`), with the app id as entropy |
+| macOS | AES-256-GCM with a random key of the app, in the login Keychain as "&lt;app id&gt; Safe Storage" |
+| Linux | AES-256-GCM with a random key of the app, in the Secret Service through libsecret (GNOME Keyring, KWallet) |
+
+`Encrypt`/`Decrypt` take bytes, `EncryptString`/`DecryptString` UTF-8 text. The bytes decrypt only for the same user
+and app id on the same platform (on Windows, on the same machine too). On macOS and Linux the key is created the first
+time; `Encrypt` and `IsEncryptionAvailable` read it from the store each time, so a `ResetKey` in another process of
+the app takes effect, while `Decrypt` keeps it in memory. The system may ask the user to allow access or to unlock the
+keychain, and the call waits for the answer (call it off the UI thread). The processes of the app take turns through a
+lock file (`$XDG_RUNTIME_DIR` on Linux, `$TMPDIR` on macOS), so two of them never create two keys. `IsEncryptionAvailable` is `false` when there's no key store (Linux
+without a Secret Service, e.g. no keyring daemon or no D-Bus session) or the user refused access; then `Encrypt` throws
+`RustinoException`. Rustino never falls back to a weaker key: decide whether to keep the secret in memory only or ask
+for it again. libsecret (0.19 or later: Ubuntu 20.04, Debian 11) is loaded when first needed, so the library still
+loads without it.
+
 ### Splashscreen
 
 A borderless window showing an image while the app starts; it closes on `Close()` or `Dispose()`. Windows only:

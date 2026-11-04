@@ -82,7 +82,7 @@ unsafe fn app_id_arg(app_id: *const c_char) -> Option<String> {
 }
 
 /// The id names a registry value, a launchd label and a file: letters, digits, '.', '-' and '_'.
-fn is_valid_app_id(id: &str) -> bool {
+pub(crate) fn is_valid_app_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && !id.starts_with('.')
