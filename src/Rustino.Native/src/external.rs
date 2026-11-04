@@ -44,7 +44,7 @@ fn is_allowed_url(value: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn open_external(url: &str) -> bool {
+pub(crate) fn open_external(url: &str) -> bool {
     use windows::Win32::System::Com::{
         COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
     };
@@ -69,7 +69,7 @@ fn open_external(url: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn open_external(url: &str) -> bool {
+pub(crate) fn open_external(url: &str) -> bool {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{NSString, NSURL};
 
@@ -81,7 +81,7 @@ fn open_external(url: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn open_external(url: &str) -> bool {
+pub(crate) fn open_external(url: &str) -> bool {
     if gtk::gio::AppInfo::launch_default_for_uri(url, None::<&gtk::gio::AppLaunchContext>).is_ok() {
         return true;
     }

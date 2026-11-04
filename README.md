@@ -236,6 +236,78 @@ window.AttachDeepLinks(single, "notes");
 The helper filters only by the supplied scheme allow-list; it does not register the scheme or validate URL
 hosts, paths, OAuth state, or tokens. Treat every URL as untrusted input.
 
+### Start at login
+
+`RustinoAutoStart` starts the app when the user logs in, for the current user only (no service, no admin rights): a
+value of the `Run` registry key on Windows, a launch agent in `~/Library/LaunchAgents` on macOS, an entry in
+`~/.config/autostart` on Linux. The user can also turn it off from the system, and the app sees it, so its settings
+always show the real state:
+
+```csharp
+using var autoStart = new RustinoAutoStart("com.company.product");
+
+// The settings page: a switch bound to the real state
+settings.StartAtLogin = autoStart.Status == AutoStartStatus.Enabled;
+settings.ShowSystemSettingsHint = autoStart.Status == AutoStartStatus.DisabledBySystem;
+autoStart.StatusChanged += (_, status) => window.SendWebMessage($"autostart:{status}"); // thread pool thread
+
+// The user flips the switch
+var status = on ? autoStart.Enable() : autoStart.Disable();
+if (status == AutoStartStatus.DisabledBySystem)   // macOS: Login Items keeps its choice
+    RustinoAutoStart.OpenSystemSettings();
+```
+
+| `AutoStartStatus` | Meaning |
+|---|---|
+| `Disabled` | No entry: the app doesn't start at login |
+| `Enabled` | The app starts at login |
+| `DisabledBySystem` | The entry is there, but the user turned it off from the system |
+| `Unsupported` | No start at login here (a Flatpak sandbox) |
+
+`Status` reads the system on each call. `StatusChanged` (and `WhenStatusChanged`) reports the changes of `Enable`,
+`Disable` and the system: once someone listens, the system is checked every `AutoStartOptions.PollInterval` (2 s).
+
+The launch at login gets `--autostart` (`RustinoAutoStart.LaunchArgument`) after the arguments of
+`AutoStartOptions.Arguments`, so the app can decide what to show: for instance only the tray icon, and the window
+when the user asks for it:
+
+```csharp
+var startHidden = RustinoAutoStart.WasLaunchedAtLogin && settings.StartInTray; // the app's own choice
+var window = new RustinoWindow()
+    .SetVisible(!startHidden)                 // before WaitForClose: the window is created hidden
+    .SetTrayIcon("icon.png", tooltip: "My App", menu: trayMenu)
+    .Load("wwwroot/index.html");
+window.TrayIconClicked += (_, _) => window.SetVisible(true).Focus();
+window.WaitForClose();
+```
+
+| `AutoStartOptions` | Default | Description |
+|---|---|---|
+| `Arguments` | none | Arguments of the launch at login, before `--autostart` |
+| `ExecutablePath` | the running executable | With `dotnet app.dll`, the dotnet host and the app's assembly |
+| `DisplayName` | the app id | Linux: the name in the startup applications |
+| `PollInterval` | 2 s | How often `StatusChanged` checks the system |
+
+When the user turns the entry off from the system:
+
+- **Windows**: Task Manager (Startup apps) and Settings › Apps › Startup leave the `Run` value and mark it off in
+  `Explorer\StartupApproved\Run`: `Status` is `DisabledBySystem`. `Enable()` turns it on again and clears that mark,
+  since the user asked for it from the app. MSIX packaged apps can't use the `Run` key: they declare a `StartupTask`
+  in their manifest. `OpenSystemSettings()` opens Settings › Apps › Startup.
+- **macOS**: System Settings › General › Login Items › Allow in the Background turns the agent off: `Status` is
+  `DisabledBySystem` (macOS 13 and later, through `SMAppService.statusForLegacyURL`; earlier versions have no such
+  switch). An app can't turn it on again by itself: `Enable()` keeps returning `DisabledBySystem` until the user turns
+  the switch back on, so show a hint and a button that calls `OpenSystemSettings()`, which opens Login Items. The agent
+  shows there with the app's name and icon when the app runs from a bundle (`AssociatedBundleIdentifiers`), and
+  macOS notifies the user when it's added.
+- **Linux**: GNOME's Startup Applications sets `X-GNOME-Autostart-enabled=false` and KDE sets `Hidden=true`: `Status`
+  is `DisabledBySystem`, and `Enable()` turns it on again. Tools that delete the entry make it `Disabled`.
+  `OpenSystemSettings()` returns `false`: desktops have no common page.
+
+The entry points to the executable that called `Enable()`. If an update moves the app (e.g. versioned folders),
+refresh it at startup without overriding the user's choice: `if (autoStart.Status == AutoStartStatus.Enabled)
+autoStart.Enable();`. `Disable()` removes the entry; disposing the object only stops the checks.
+
 ### Splashscreen
 
 A borderless window showing an image while the app starts; it closes on `Close()` or `Dispose()`. Windows only:
