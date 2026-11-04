@@ -95,4 +95,12 @@ internal static partial class RustinoExtDllImports
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_reopen_handler(RustinoWindowHandle instance, IntCallback handler);
+
+    // --- Child windows ---
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_set_parent(RustinoWindowHandle instance, IntPtr parent);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_set_modal(RustinoWindowHandle instance, int modal);
 }

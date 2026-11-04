@@ -62,6 +62,9 @@ pub struct WindowConfig {
     pub zoom_hotkeys: bool,
     pub initialization_scripts: Vec<String>,
     pub custom_schemes: Vec<String>,
+    /// The key of the parent window, which must run when this one starts
+    pub parent: Option<usize>,
+    pub modal: bool,
 
     pub about_name: Option<String>,
     pub about_version: Option<String>,
@@ -107,6 +110,8 @@ impl Default for WindowConfig {
             zoom_hotkeys: false,
             initialization_scripts: Vec::new(),
             custom_schemes: Vec::new(),
+            parent: None,
+            modal: false,
             about_name: None,
             about_version: None,
             about_copyright: None,

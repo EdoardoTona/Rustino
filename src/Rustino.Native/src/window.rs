@@ -516,6 +516,7 @@ struct WindowRuntime {
     /// Keeps the window and the webview reachable from `invoke`
     _running: crate::invoke::RunningGuard,
     // Dropped before the window
+    _parent: Option<crate::parent::Child>,
     webview: Rc<wry::WebView>,
     window: Rc<tao::window::Window>,
     _web_context: Option<wry::WebContext>,
@@ -614,6 +615,18 @@ impl WindowRuntime {
         }
 
         window_builder = ext.configure_window(window_builder);
+
+        // The parent runs in this event loop
+        let parent = config.parent.and_then(|key| {
+            let parent = crate::invoke::running_window(key);
+            if parent.is_none() {
+                config.logger().warning("The parent window doesn't run: the window opens without it.");
+            }
+            parent
+        });
+        if let Some(ref parent) = parent {
+            window_builder = crate::parent::configure(window_builder, parent, config.modal);
+        }
 
         let window = window_builder
             .build(target)
@@ -787,6 +800,7 @@ impl WindowRuntime {
         // Reachable from the callbacks, which run on this thread
         let (window, webview) = (Rc::new(window), Rc::new(webview));
         let running = crate::invoke::register_running(key, &window, &webview);
+        let parent = parent.map(|parent| crate::parent::attach(&window, &parent, config.modal));
 
         // Initialize shared state from actual window
         let size = window.inner_size();
@@ -836,6 +850,7 @@ impl WindowRuntime {
             tray: None,
             _menu_events: menu_events,
             _running: running,
+            _parent: parent,
             webview,
             window,
             _web_context: web_context,
@@ -1011,8 +1026,18 @@ fn deliver(
         if index == 0 {
             *control_flow = ControlFlow::Exit;
         } else {
-            windows.remove(index).closed();
+            close_window(windows, windows[index].key);
         }
+    }
+}
+
+/// Closes the window `key` after its child windows, which close with it.
+fn close_window(windows: &mut Vec<WindowRuntime>, key: usize) {
+    while let Some(child) = windows.iter().find(|w| w.config.parent == Some(key)).map(|w| w.key) {
+        close_window(windows, child);
+    }
+    if let Some(index) = windows.iter().position(|w| w.key == key) {
+        windows.remove(index).closed();
     }
 }
 

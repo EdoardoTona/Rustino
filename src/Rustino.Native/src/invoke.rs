@@ -93,6 +93,11 @@ pub(crate) fn register_running(key: usize, window: &Rc<Window>, webview: &Rc<Web
     RunningGuard(key)
 }
 
+/// The window `key` when its event loop runs on this thread.
+pub(crate) fn running_window(key: usize) -> Option<Rc<Window>> {
+    RUNNING.with(|running| running.borrow().iter().find(|r| r.key == key).map(|r| Rc::clone(&r.window)))
+}
+
 /// Whether the event loop of a window runs on this thread.
 pub(crate) fn runs_event_loop() -> bool {
     RUNNING.with(|running| !running.borrow().is_empty())

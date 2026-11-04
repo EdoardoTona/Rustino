@@ -23,6 +23,8 @@ public partial class RustinoWindow
     private (double X, double Y)? _trafficLightPosition;
     private string? _desktopFileName;
     private bool _dragRegions = true;
+    private RustinoWindow? _parent;
+    private bool _modal;
 
     private readonly EventObservable<WindowTheme> _themeChangedObs = new();
     private readonly EventObservable<ScaleFactorChangedEventArgs> _scaleFactorChangedObs = new();
@@ -318,6 +320,32 @@ public partial class RustinoWindow
     }
 
     /// <summary>
+    /// Makes the window a child of <paramref name="parent"/> (null: a top-level window): it stays above the parent
+    /// and closes with it. The parent must be running when this window starts, otherwise the window opens without it.
+    /// Must be called before <see cref="WaitForClose"/>.
+    /// </summary>
+    public RustinoWindow SetParent(RustinoWindow? parent)
+    {
+        if (ReferenceEquals(parent, this))
+            throw new ArgumentException("A window can't be its own parent.", nameof(parent));
+        SetCreationOnly(ref _parent, parent, nameof(SetParent),
+            static (instance, value) => RustinoExtDllImports.rustino_set_parent(instance, value?.EnsureNative().Key ?? IntPtr.Zero));
+        return this;
+    }
+
+    /// <summary>
+    /// With <see cref="SetParent"/>, blocks the parent until this window closes: on Windows the parent is disabled,
+    /// on macOS the window is a sheet of the parent, on Linux a modal window (which blocks the other windows of the
+    /// app too). Must be called before <see cref="WaitForClose"/>.
+    /// </summary>
+    public RustinoWindow SetModal(bool modal)
+    {
+        SetCreationOnly(ref _modal, modal, nameof(SetModal),
+            static (instance, value) => RustinoExtDllImports.rustino_set_modal(instance, value ? 1 : 0));
+        return this;
+    }
+
+    /// <summary>
     /// Position of the macOS traffic lights, in logical pixels from the top-left corner, also while the window runs.
     /// It wins over the centering in <see cref="SetTitleBarOverlayHeight"/>.
     /// </summary>
@@ -401,6 +429,10 @@ public partial class RustinoWindow
             RustinoExtDllImports.rustino_set_desktop_file_name(handle, _desktopFileName);
         if (!_dragRegions)
             RustinoExtDllImports.rustino_set_drag_regions_enabled(handle, 0);
+        if (_parent is { } parent)
+            RustinoExtDllImports.rustino_set_parent(handle, parent.EnsureNative().Key);
+        if (_modal)
+            RustinoExtDllImports.rustino_set_modal(handle, 1);
     }
 
     // Called by RegisterCallbacks

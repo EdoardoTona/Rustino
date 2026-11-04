@@ -176,6 +176,27 @@ new Thread(() =>
   `RustinoException`, because that thread can't block. Start a thread as above.
 - On macOS the menu bar belongs to the app: set it from the first window. `SetMenu` from another window replaces it.
 
+#### Child and modal windows
+
+`SetParent(window)` makes a window a child of a running window: it stays above its parent and closes with it.
+`SetModal(true)` also blocks the parent until the child closes. Both are pre-run settings.
+
+```csharp
+var settings = new RustinoWindow().SetTitle("Settings").SetSize(480, 360)
+    .SetParent(mainWindow).SetModal(true)
+    .Load("wwwroot/settings.html");
+new Thread(() => { settings.WaitForClose(); settings.Dispose(); }) { IsBackground = true }.Start();
+```
+
+| Platform | Child | Modal |
+|---|---|---|
+| Windows | Owned window: above its owner, minimized with it, no taskbar button of its own | The parent is disabled |
+| macOS | Child window: moves with the parent | A sheet attached to the parent's title bar |
+| Linux | Transient window | A modal GTK window, which blocks every other window of the app |
+
+The parent must be running when the child starts, otherwise the child opens as a top-level window (with a warning
+in the log).
+
 ### Single Instance
 
 Acquire the app id at the start of `Main`. The first process becomes primary; later processes forward their
