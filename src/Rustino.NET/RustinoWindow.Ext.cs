@@ -228,8 +228,11 @@ public partial class RustinoWindow
     }
 
     /// <summary>
-    /// macOS title bar style, also while the window runs. A chromeless window gets it back with
-    /// <c>SetChromeless(false)</c>.
+    /// macOS title bar style, also while the window runs. With <see cref="MacTitleBarStyle.Overlay"/> the page makes
+    /// room for the traffic lights with the CSS variables of the overlay title bar of Windows and Linux
+    /// (<see cref="SetTitleBarOverlay"/>): <c>--rustino-window-controls-left</c> is their width, and
+    /// <c>--rustino-titlebar-height</c> the height set with <see cref="SetTitleBarOverlayHeight"/>. A chromeless
+    /// window gets the style back with <c>SetChromeless(false)</c>.
     /// </summary>
     public RustinoWindow SetMacTitleBarStyle(MacTitleBarStyle style)
     {
@@ -247,8 +250,8 @@ public partial class RustinoWindow
     /// <c>--rustino-window-controls-left</c> and <c>--rustino-window-controls-right</c>, set only while the buttons
     /// show, and marks its title bar with <c>data-rustino-drag-region</c>. Needs drag regions
     /// (<see cref="SetDragRegionsEnabled"/>); ignored on macOS, where <see cref="SetMacTitleBarStyle"/> with
-    /// <see cref="MacTitleBarStyle.Overlay"/> does the same. A chromeless window gets it back with
-    /// <c>SetChromeless(false)</c>.
+    /// <see cref="MacTitleBarStyle.Overlay"/> does the same around the traffic lights, with the same variables. A
+    /// chromeless window gets it back with <c>SetChromeless(false)</c>.
     /// </summary>
     public RustinoWindow SetTitleBarOverlay(bool overlay)
     {
@@ -288,8 +291,9 @@ public partial class RustinoWindow
     /// <summary>
     /// Height of the overlay title bar (<see cref="SetTitleBarOverlay"/>) in logical pixels, also while the window
     /// runs: the buttons stretch to it and <c>--rustino-titlebar-height</c> follows. 0 goes back to the platform's
-    /// height, 32 on Windows and 40 on Linux. On macOS center the traffic lights with
-    /// <see cref="SetMacTrafficLightPosition"/>.
+    /// height, 32 on Windows and 40 on Linux. On macOS, with <see cref="MacTitleBarStyle.Overlay"/>, the traffic
+    /// lights are centered in it, as far from the left edge as from the top, unless
+    /// <see cref="SetMacTrafficLightPosition"/> placed them, and 0 puts them back where macOS puts them.
     /// </summary>
     public RustinoWindow SetTitleBarOverlayHeight(int height)
     {
@@ -313,7 +317,10 @@ public partial class RustinoWindow
         return this;
     }
 
-    /// <summary>Position of the macOS traffic lights, in logical pixels from the top-left corner.</summary>
+    /// <summary>
+    /// Position of the macOS traffic lights, in logical pixels from the top-left corner, also while the window runs.
+    /// It wins over the centering in <see cref="SetTitleBarOverlayHeight"/>.
+    /// </summary>
     public RustinoWindow SetMacTrafficLightPosition(double x, double y)
     {
         ThrowIfDisposed();

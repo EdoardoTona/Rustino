@@ -122,17 +122,24 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
   };
   const hosts = {};
 
+  let lastControls = null;
   const renderControls = (controls) => {
+    lastControls = controls;
     const root = document.documentElement;
+    // No style for the native controls (macOS), which the page only makes room for: they are
+    // measured in points, which the page zoom doesn't scale, and devicePixelRatio is the scale
+    // factor of the screen times the zoom
     const style = controls && STYLES[controls.platform];
-    const height = style && (controls.height || style.height);
-    const widths = { left: 0, right: 0 };
+    const unit = controls && !style ? controls.scale_factor / devicePixelRatio : 1;
+    const height = controls && (style ? controls.height || style.height : Math.round(controls.height * unit));
+    const widths = { left: controls && !style ? Math.ceil(controls.native_left * unit) : 0, right: 0 };
     for (const side of ['left', 'right']) {
       const buttons = style ? controls[side] : [];
       const property = '--rustino-window-controls-' + side;
       if (!buttons.length) {
         if (hosts[side]) hosts[side].remove();
-        root.style.removeProperty(property);
+        if (widths[side]) root.style.setProperty(property, widths[side] + 'px');
+        else root.style.removeProperty(property);
         continue;
       }
       let host = hosts[side];
@@ -160,7 +167,7 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
     }
     // Safe area of the title bar: the strip free of window controls, as the titlebar-area-*
     // environment variables of the Window Controls Overlay
-    const area = style && {
+    const area = controls && {
       '--rustino-titlebar-height': height + 'px',
       '--rustino-titlebar-area-x': widths.left + 'px',
       '--rustino-titlebar-area-y': '0px',
@@ -173,6 +180,11 @@ const DRAG_REGION_SCRIPT: &str = r#"(() => {
       else root.style.removeProperty(name);
     }
   };
+
+  // The page zoom changes the size of the viewport
+  addEventListener('resize', () => {
+    if (lastControls && !STYLES[lastControls.platform]) renderControls(lastControls);
+  });
 
   const setState = (state) => {
     border = state.border;
@@ -216,17 +228,22 @@ struct ChromeState {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 struct WindowControls {
-    /// "windows" or "gnome": the look of the buttons
+    /// "windows" or "gnome": the look of the buttons the script draws; "macos": the native
+    /// traffic lights, which the page only makes room for
     platform: &'static str,
     maximized: bool,
     /// CSS color set by the host, over the page's
     color: Option<String>,
-    /// Title bar height set by the host, in CSS pixels; `None` keeps the platform's
+    /// Title bar height set by the host, in CSS pixels (in points with native controls); `None`
+    /// keeps the platform's
     height: Option<u32>,
     left: Vec<ControlButton>,
     right: Vec<ControlButton>,
+    /// Width of the native controls on the left (the traffic lights with their margins), in points
+    native_left: u32,
+    /// Physical pixels per point: the script takes the page zoom out of it and devicePixelRatio
+    scale_factor: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -337,6 +354,9 @@ pub enum WindowCommand {
     /// The GTK theme settings changed (tao reports theme changes only on Windows and macOS)
     #[cfg(target_os = "linux")]
     CheckTheme,
+    /// AppKit may lay out the title bar again after the traffic lights moved, putting them back
+    #[cfg(target_os = "macos")]
+    CheckTrafficLights,
 }
 
 /// Configuration of the window features until the window runs.
@@ -452,12 +472,17 @@ impl WindowExt {
             title_bar_overlay_color: self.options.title_bar_overlay_color,
             title_bar_overlay_height: self.options.title_bar_overlay_height,
             chrome: None,
-            chrome_dirty: false,
+            // macOS places the traffic lights on the first update, also without drag regions
+            chrome_dirty: cfg!(target_os = "macos"),
             #[cfg(target_os = "macos")]
             mac_title_bar: MacTitleBar {
                 style: self.options.mac_title_bar_style,
                 traffic_lights: self.options.traffic_light_position,
                 pending: false,
+                default_lights: None,
+                placed: None,
+                proxy,
+                checks: 0,
             },
             #[cfg(target_os = "linux")]
             _theme_watch: GtkThemeWatch::new(proxy),
@@ -507,7 +532,6 @@ pub struct WindowExtRuntime {
     title_bar_overlay: bool,
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     title_bar_overlay_color: Option<(u8, u8, u8, u8)>,
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
     title_bar_overlay_height: Option<u32>,
     /// Chrome state last sent to the page
     chrome: Option<ChromeState>,
@@ -573,6 +597,8 @@ impl WindowExtRuntime {
                 ..
             } => {
                 self.state.store_scale_factor(scale_factor);
+                // The script turns the size of the native controls into CSS pixels with it
+                self.chrome_dirty = true;
                 if let Some(cb) = self.callbacks.on_scale_factor_changed {
                     let (width, height) = (new_inner_size.width as i32, new_inner_size.height as i32);
                     unsafe { cb(self.context, scale_factor, width, height) };
@@ -675,15 +701,17 @@ impl WindowExtRuntime {
             #[allow(unused_variables)]
             WindowCommand::SetMacTitleBarStyle(style) => {
                 #[cfg(target_os = "macos")]
-                self.mac_title_bar.set_style(style, window);
+                {
+                    self.mac_title_bar.set_style(style, window);
+                    self.chrome_dirty = true;
+                }
             }
             #[allow(unused_variables)]
             WindowCommand::SetTrafficLightPosition(x, y) => {
                 #[cfg(target_os = "macos")]
                 {
-                    use tao::platform::macos::WindowExtMacOS;
-                    window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
                     self.mac_title_bar.traffic_lights = Some((x, y));
+                    self.chrome_dirty = true;
                 }
             }
             #[allow(unused_variables)]
@@ -731,6 +759,8 @@ impl WindowExtRuntime {
             WindowCommand::PageReady => self.update_chrome(window, webview, true),
             #[cfg(target_os = "linux")]
             WindowCommand::CheckTheme => self.theme_changed(window.theme()),
+            #[cfg(target_os = "macos")]
+            WindowCommand::CheckTrafficLights => self.chrome_dirty = true,
         }
     }
 
@@ -764,10 +794,10 @@ impl WindowExtRuntime {
     }
 
     /// The buttons of the overlay title bar, none in fullscreen
-    fn window_controls(&self, #[allow(unused_variables)] window: &Window) -> Option<WindowControls> {
+    fn window_controls(&mut self, window: &Window) -> Option<WindowControls> {
         #[cfg(target_os = "macos")]
         {
-            None
+            self.mac_title_bar.controls(window, self.title_bar_overlay_height)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -801,6 +831,8 @@ impl WindowExtRuntime {
                     height,
                     left: Vec::new(),
                     right: right.collect(),
+                    native_left: 0,
+                    scale_factor: window.scale_factor(),
                 }
             };
             // GTK places the buttons of the decoration layout and hides the disabled ones
@@ -821,6 +853,8 @@ impl WindowExtRuntime {
                     height,
                     left: buttons(left),
                     right: buttons(right),
+                    native_left: 0,
+                    scale_factor: window.scale_factor(),
                 }
             };
             Some(controls)
@@ -836,6 +870,26 @@ struct MacTitleBar {
     /// The decorations are coming back: tao rebuilds the style mask asynchronously, without the
     /// style, which goes back on the resize that follows
     pending: bool,
+    /// Where the traffic lights sit before Rustino moves them: they go back there when the
+    /// overlay title bar loses its height
+    default_lights: Option<TrafficLights>,
+    /// Where Rustino put the traffic lights: tao's inset and the left and top margins it gives
+    placed: Option<((f64, f64), (f64, f64))>,
+    proxy: CommandProxy,
+    /// Checks in a row that found the lights moved back
+    checks: u8,
+}
+
+/// The traffic lights in the window, in points from its top left corner.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy)]
+struct TrafficLights {
+    /// Left edge of the close button
+    left: f64,
+    /// Right edge of the zoom button
+    right: f64,
+    top: f64,
+    height: f64,
 }
 
 #[cfg(target_os = "macos")]
@@ -876,9 +930,185 @@ impl MacTitleBar {
         unsafe {
             let _: () = objc2::msg_send![ns_window, setTitleVisibility: visibility];
         }
-        if let Some((x, y)) = self.traffic_lights {
-            window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
+    }
+
+    /// The traffic lights the page goes under, with the overlay title bar: the page leaves them
+    /// their width and, unless the host sets a height, as high a title bar as their margin above
+    /// gives them.
+    fn controls(&mut self, window: &Window, height: Option<u32>) -> Option<WindowControls> {
+        if self.pending || in_fullscreen(window) {
+            return None;
         }
+        let overlay = self.style == MacTitleBarStyle::Overlay && window.is_decorated();
+        self.place_lights(window, height.filter(|_| overlay));
+        if !overlay {
+            return None;
+        }
+        let lights = traffic_lights(window)?;
+        let height = height.unwrap_or((2.0 * lights.top + lights.height).round() as u32);
+        Some(WindowControls {
+            platform: "macos",
+            maximized: false,
+            color: None,
+            height: Some(height),
+            left: Vec::new(),
+            right: Vec::new(),
+            native_left: (lights.right + lights.left).round() as u32,
+            scale_factor: window.scale_factor(),
+        })
+    }
+
+    /// Moves the traffic lights where the host placed them or, by default, centers them in the
+    /// title bar height set by the host, as far from the left edge as from the top. Without a
+    /// height they go back where they were.
+    fn place_lights(&mut self, window: &Window, height: Option<u32>) {
+        use tao::platform::macos::WindowExtMacOS;
+        // AppKit puts the lights back in their place when the decorations come back, in a layout
+        // pass that runs only after the resize: run it now
+        let ns_window = window.ns_window() as *mut objc2::runtime::AnyObject;
+        unsafe {
+            let content: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_window, contentView];
+            let frame_view: *mut objc2::runtime::AnyObject = objc2::msg_send![content, superview];
+            if !frame_view.is_null() {
+                let _: () = objc2::msg_send![frame_view, layoutSubtreeIfNeeded];
+            }
+        }
+        let Some(lights) = traffic_lights(window) else { return };
+        if self.placed.is_none() && self.traffic_lights.is_none() {
+            self.default_lights = Some(lights);
+        }
+        let at = |(left, top): (f64, f64)| (lights.left - left).abs() < 0.5 && (lights.top - top).abs() < 0.5;
+        if let Some((x, y)) = self.traffic_lights {
+            if self.placed.is_some_and(|(inset, margins)| inset == (x, y) && at(margins)) {
+                self.checks = 0;
+                return;
+            }
+            set_traffic_light_inset_now(window, x, y);
+            self.placed = traffic_lights(window).map(|lights| ((x, y), (lights.left, lights.top)));
+        } else {
+            let target = match (height, self.default_lights) {
+                (Some(height), Some(default)) => {
+                    let margin = ((f64::from(height) - default.height) / 2.0).max(0.0);
+                    (margin, margin)
+                }
+                (None, Some(default)) if self.placed.is_some() => (default.left, default.top),
+                _ => return,
+            };
+            if at(target) {
+                if height.is_none() {
+                    self.placed = None;
+                }
+                self.checks = 0;
+                return;
+            }
+            // tao's y isn't the top margin of the lights: measure and correct
+            let (x, top) = target;
+            let mut y = self.placed.map_or(top, |((_, y), (_, old_top))| y - old_top + top);
+            for _ in 0..2 {
+                y = y.clamp(0.0, MAX_TRAFFIC_LIGHT_INSET);
+                set_traffic_light_inset_now(window, x, y);
+                match traffic_lights(window) {
+                    Some(lights) if (lights.top - top).abs() > 0.25 => y += top - lights.top,
+                    _ => break,
+                }
+            }
+            self.placed = height.map(|_| ((x, y), target));
+        }
+        // AppKit lays out the title bar again after a change of style or decorations, later
+        // and without telling: check once it's done, a few times at most
+        if self.checks < 3 {
+            self.checks += 1;
+            let proxy = self.proxy.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let _ = proxy.send_event(RustinoCommand::Window(WindowCommand::CheckTrafficLights));
+            });
+        }
+    }
+}
+
+/// Bounds tao's y for the traffic lights, against measures taken while AppKit moves them.
+#[cfg(target_os = "macos")]
+const MAX_TRAFFIC_LIGHT_INSET: f64 = 200.0;
+
+/// Also while the window goes in and out of fullscreen, when tao no longer or not yet reports it.
+#[cfg(target_os = "macos")]
+fn in_fullscreen(window: &Window) -> bool {
+    use tao::platform::macos::WindowExtMacOS;
+    // NSWindowStyleMaskFullScreen
+    const FULL_SCREEN: usize = 1 << 14;
+    let ns_window = window.ns_window() as *mut objc2::runtime::AnyObject;
+    let mask: usize = unsafe { objc2::msg_send![ns_window, styleMask] };
+    window.fullscreen().is_some() || mask & FULL_SCREEN != 0
+}
+
+/// tao stores the inset for its `drawRect:`, which the webview over the whole window keeps from
+/// running, and for leaving fullscreen: the lights move now as tao would move them.
+#[cfg(target_os = "macos")]
+fn set_traffic_light_inset_now(window: &Window, x: f64, y: f64) {
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSPoint, NSRect};
+    use tao::platform::macos::WindowExtMacOS;
+    window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
+    let ns_window = window.ns_window() as *mut AnyObject;
+    unsafe {
+        // NSWindowCloseButton, NSWindowMiniaturizeButton and NSWindowZoomButton
+        let buttons: [*mut AnyObject; 3] = [
+            objc2::msg_send![ns_window, standardWindowButton: 0usize],
+            objc2::msg_send![ns_window, standardWindowButton: 1usize],
+            objc2::msg_send![ns_window, standardWindowButton: 2usize],
+        ];
+        if buttons.iter().any(|button| button.is_null()) {
+            return;
+        }
+        let close: NSRect = objc2::msg_send![buttons[0], frame];
+        let miniaturize: NSRect = objc2::msg_send![buttons[1], frame];
+        let titlebar: *mut AnyObject = objc2::msg_send![buttons[0], superview];
+        let container: *mut AnyObject = objc2::msg_send![titlebar, superview];
+        if container.is_null() {
+            return;
+        }
+        let window_frame: NSRect = objc2::msg_send![ns_window, frame];
+        let mut container_frame: NSRect = objc2::msg_send![container, frame];
+        container_frame.size.height = close.size.height + y;
+        container_frame.origin.y = window_frame.size.height - container_frame.size.height;
+        let _: () = objc2::msg_send![container, setFrame: container_frame];
+        let spacing = miniaturize.origin.x - close.origin.x;
+        for (i, &button) in buttons.iter().enumerate() {
+            let frame: NSRect = objc2::msg_send![button, frame];
+            let origin = NSPoint::new(x + i as f64 * spacing, frame.origin.y);
+            let _: () = objc2::msg_send![button, setFrameOrigin: origin];
+        }
+    }
+}
+
+/// `None` when the window has no traffic lights (chromeless).
+#[cfg(target_os = "macos")]
+fn traffic_lights(window: &Window) -> Option<TrafficLights> {
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::NSRect;
+    use tao::platform::macos::WindowExtMacOS;
+    let ns_window = window.ns_window() as *mut AnyObject;
+    unsafe {
+        // NSWindowCloseButton and NSWindowZoomButton
+        let close: *mut AnyObject = objc2::msg_send![ns_window, standardWindowButton: 0usize];
+        let zoom: *mut AnyObject = objc2::msg_send![ns_window, standardWindowButton: 2usize];
+        if close.is_null() || zoom.is_null() {
+            return None;
+        }
+        // In window coordinates, from the bottom left corner
+        let frame = |button: *mut AnyObject| -> NSRect {
+            let bounds: NSRect = objc2::msg_send![button, bounds];
+            objc2::msg_send![button, convertRect: bounds, toView: std::ptr::null_mut::<AnyObject>()]
+        };
+        let (close, zoom) = (frame(close), frame(zoom));
+        let window_frame: NSRect = objc2::msg_send![ns_window, frame];
+        Some(TrafficLights {
+            left: close.origin.x,
+            right: zoom.origin.x + zoom.size.width,
+            top: window_frame.size.height - close.origin.y - close.size.height,
+            height: close.size.height,
+        })
     }
 }
 
@@ -1269,11 +1499,31 @@ mod tests {
                 height: Some(48),
                 left: Vec::new(),
                 right: vec![ControlButton { kind: "close", enabled: false }],
+                native_left: 0,
+                scale_factor: 1.0,
             }),
         };
         assert_eq!(
             serde_json::to_string(&chrome).unwrap(),
-            r#"{"border":6,"controls":{"platform":"windows","maximized":true,"color":"rgba(224,224,224,1)","height":48,"left":[],"right":[{"kind":"close","enabled":false}]}}"#
+            r#"{"border":6,"controls":{"platform":"windows","maximized":true,"color":"rgba(224,224,224,1)","height":48,"left":[],"right":[{"kind":"close","enabled":false}],"native_left":0,"scale_factor":1.0}}"#
+        );
+        // macOS: no buttons, only room for the traffic lights
+        let chrome = ChromeState {
+            border: 0,
+            controls: Some(WindowControls {
+                platform: "macos",
+                maximized: false,
+                color: None,
+                height: Some(28),
+                left: Vec::new(),
+                right: Vec::new(),
+                native_left: 72,
+                scale_factor: 2.0,
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&chrome).unwrap(),
+            r#"{"border":0,"controls":{"platform":"macos","maximized":false,"color":null,"height":28,"left":[],"right":[],"native_left":72,"scale_factor":2.0}}"#
         );
     }
 

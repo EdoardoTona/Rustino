@@ -47,7 +47,8 @@ public enum MacTitleBarStyle
     Transparent = 1,
     /// <summary>
     /// The page extends under a transparent title bar without title, where only the traffic lights remain
-    /// (the look of Slack or VS Code). Mark the page's title bar with <c>data-rustino-drag-region</c>.
+    /// (the look of Slack or VS Code). Mark the page's title bar with <c>data-rustino-drag-region</c>; the CSS
+    /// variables of the overlay title bar give its height and the room the traffic lights take on the left.
     /// </summary>
     Overlay = 2,
 }

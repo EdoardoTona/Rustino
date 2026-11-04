@@ -174,17 +174,8 @@ window.Reopened += (_, hasVisibleWindows) =>
 };
 
 // The tab bar takes the place of the title bar, next to the traffic lights (macOS) or the window
-// buttons drawn by Rustino (Windows, Linux)
-if (OperatingSystem.IsMacOS())
-{
-    window.SetMacTitleBarStyle(MacTitleBarStyle.Overlay)
-        .SetMacTrafficLightPosition(14, 12)
-        .AddInitScript("document.documentElement.style.setProperty('--titlebar-inset', '80px');");
-}
-else
-{
-    window.SetTitleBarOverlay(true);
-}
+// buttons drawn by Rustino (Windows, Linux), as high as the tabs
+window.SetMacTitleBarStyle(MacTitleBarStyle.Overlay).SetTitleBarOverlay(true).SetTitleBarOverlayHeight(40);
 
 // --- Webview: file drop, downloads, document title ---
 var saveToDownloads = false;
@@ -535,9 +526,6 @@ void SetTitleBar(string mode)
     window.SetChromeless(chromeless);
     if (!chromeless)
         window.SetMacTitleBarStyle(Enum.Parse<MacTitleBarStyle>(mode)).SetTitleBarOverlay(mode == "Overlay");
-    // Room for the traffic lights only when the page is under them
-    var inset = OperatingSystem.IsMacOS() && mode == "Overlay" ? "80px" : "8px";
-    window.ExecuteScript($"document.documentElement.style.setProperty('--titlebar-inset', '{inset}')");
 }
 
 void Log(string text)
@@ -606,7 +594,7 @@ static string Html() => """
 
       /* Tab bar */
       /* The side borders keep the room of the window buttons out of the scrolling area */
-      .tabs { display: flex; background: #16213e; border-bottom: 1px solid #333; border-left: max(var(--titlebar-inset, 8px), var(--rustino-window-controls-left, 0px)) solid #16213e; border-right: var(--rustino-window-controls-right, 8px) solid #16213e; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; }
+      .tabs { display: flex; background: #16213e; border-bottom: 1px solid #333; border-left: var(--rustino-window-controls-left, 8px) solid #16213e; border-right: var(--rustino-window-controls-right, 8px) solid #16213e; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; }
       .tab { flex-shrink: 0; white-space: nowrap; padding: 10px 18px; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: #888; border-bottom: 2px solid transparent; transition: all 0.15s; user-select: none; }
       .tab:hover { color: #ccc; }
       .tab.active { color: #00d4ff; border-bottom-color: #00d4ff; }

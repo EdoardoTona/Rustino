@@ -638,11 +638,11 @@ The platform limits below hold both before the window runs and while it runs.
 | `SetClosable(bool)` / `SetMinimizable(bool)` / `SetMaximizable(bool)` | Enable the title bar buttons. Linux: only `SetClosable`, as a request the window manager may ignore; minimize and maximize can't be disabled |
 | `SetAlwaysOnBottom(bool)` | Keeps the window below the others, replacing `SetTopMost`. Linux: a request to the window manager, not supported on Wayland |
 | `SetIgnoreCursorEvents(bool)` | Mouse clicks go through the window, for overlays |
-| `SetMacTitleBarStyle(MacTitleBarStyle)` | macOS: `Default`, `Transparent` or `Overlay` (no title, the page under the traffic lights, like Slack or VS Code). `SetChromeless(false)` brings the style back |
+| `SetMacTitleBarStyle(MacTitleBarStyle)` | macOS: `Default`, `Transparent` or `Overlay` (no title, the page under the traffic lights, like Slack or VS Code, with the CSS variables of the overlay title bar: see below). `SetChromeless(false)` brings the style back |
 | `SetTitleBarOverlayColor(byte, byte, byte, byte)` / `ResetTitleBarOverlayColor()` | Color of the overlay title bar buttons, over the page's CSS |
 | `SetTitleBarOverlay(bool)` | Windows, Linux: the page extends to the top of the window, under minimize, maximize and close buttons drawn by Rustino, like VS Code (see below) |
-| `SetTitleBarOverlayHeight(int)` | Height of the overlay title bar in logical pixels (0: the platform's, 32 on Windows and 40 on Linux) |
-| `SetMacTrafficLightPosition(double, double)` | macOS: position of the traffic lights, in logical pixels |
+| `SetTitleBarOverlayHeight(int)` | Height of the overlay title bar in logical pixels (0: the platform's, 32 on Windows, 40 on Linux, 28 on macOS); on macOS it centers the traffic lights |
+| `SetMacTrafficLightPosition(double, double)` | macOS: position of the traffic lights, in logical pixels, over the centering of `SetTitleBarOverlayHeight` |
 | `SetDesktopFileName(string)` | Linux: `.desktop` file of the app, for the dock badge and progress |
 | `SetDragRegionsEnabled(bool)` | Pre-run: drag regions and edge resizing from the page (on by default, see below) |
 | `DragWindow()` / `DragResizeWindow(ResizeDirection)` | Move or resize the window with the mouse (call them while the left button is down) |
@@ -671,15 +671,17 @@ The elements with `data-rustino-drag-region` move the window, and a double click
 
 On Windows and Linux the page covers the resize borders of chromeless windows: its outer 6 pixels resize the window instead. macOS keeps its own resize borders. With `MacTitleBarStyle.Overlay` the page's title bar needs the attribute too.
 
-#### Overlay title bar on Windows and Linux
+#### Overlay title bar
 
 `SetTitleBarOverlay(true)` removes the native title bar and draws the minimize, maximize and close buttons over the page, in the top corner, like VS Code: Windows 11 caption buttons on Windows, GNOME round buttons on Linux (placed and filtered by the GTK `gtk-decoration-layout` setting). The buttons follow `SetMinimizable`, `SetMaximizable`, `SetClosable` and `SetResizable`, turn into restore when the window is maximized and go away in fullscreen; close raises `Closing` like the native button. The window keeps resizing from the page's edges, as a chromeless window.
 
-The page lays out its own title bar in the room left by the buttons, with CSS variables set on `<html>` only while the buttons show:
+On macOS `SetMacTitleBarStyle(MacTitleBarStyle.Overlay)` does the same with the native traffic lights, on the left.
+
+The page lays out its own title bar in the room left by the buttons, with CSS variables set on `<html>` only while the buttons show, on every platform (on macOS `--rustino-window-controls-left` is the room of the traffic lights, and `--rustino-window-controls-right` is not set):
 
 ```css
 header {
-  height: var(--rustino-titlebar-height, 32px);   /* SetTitleBarOverlayHeight, by default 32px on Windows, 40px on Linux */
+  height: var(--rustino-titlebar-height, 32px);   /* SetTitleBarOverlayHeight, by default 32px on Windows, 40px on Linux, 28px on macOS */
   padding-left: var(--rustino-window-controls-left, 0px);
   padding-right: var(--rustino-window-controls-right, 0px);
 }
@@ -697,9 +699,18 @@ The safe area of the title bar, the strip free of buttons, has the variables of 
 }
 ```
 
-`SetTitleBarOverlayHeight(48)` makes the title bar taller, for instance for tabs or a search box: on Windows the buttons stretch to the new height, like the caption buttons of VS Code, on Linux the round buttons stay centered, and the variables follow. On macOS the page draws its title bar at the height it wants under `MacTitleBarStyle.Overlay`, and `SetMacTrafficLightPosition` centers the traffic lights in it.
+`SetTitleBarOverlayHeight(48)` makes the title bar taller, for instance for tabs or a search box: on Windows the buttons stretch to the new height, like the caption buttons of VS Code, on Linux the round buttons stay centered, on macOS the traffic lights are centered, as far from the left edge as from the top, and the variables follow. `SetMacTrafficLightPosition` places the traffic lights elsewhere, and the variables follow them.
 
-The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`), and on Windows 11 the Snap Layouts flyout doesn't open from the maximize button (Win+Z still works). On macOS the option is ignored: use `SetMacTitleBarStyle(MacTitleBarStyle.Overlay)`.
+The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`), and on Windows 11 the Snap Layouts flyout doesn't open from the maximize button (Win+Z still works). On macOS `SetTitleBarOverlay` is ignored, and the traffic lights keep the system's colors.
+
+The variables are CSS pixels and follow the page zoom (`SetZoom`, zoom hotkeys): on macOS, where the traffic lights don't zoom with the page, a zoomed out page gets larger values and a zoomed in one smaller ones, so the room stays the same on screen.
+
+On macOS 26 the traffic lights of an app look like those of the system apps (larger and further apart, 23 points from one to the next instead of 20) only when its executable was linked with the macOS 26 SDK. The executables of .NET apps are the `dotnet` host or the app's apphost, which Microsoft links with an older SDK (15.5 up to .NET 11), so macOS shows them the traffic lights of macOS 15. Rustino measures the traffic lights, so the variables fit either look. Setting the SDK version in the apphost after publishing gives the new look, a trick that works but that Microsoft doesn't support: macOS then applies all the behavior meant for apps built for macOS 26, not only the new traffic lights, so test the app with it. Run it before code signing, which it invalidates, keeping the minimum macOS version of the apphost (`minos` in `vtool -show-build`: 12.0 on .NET 10, 14.0 on .NET 11):
+
+```bash
+vtool -set-build-version macos 12.0 26.0 -replace -output MyApp.app/Contents/MacOS/MyApp MyApp.app/Contents/MacOS/MyApp
+vtool -show-build MyApp.app/Contents/MacOS/MyApp   # sdk 26.0
+```
 
 The drag region script talks to the native side with `window.ipc.postMessage` messages that start with `__rustino:` (like the print script on Windows and macOS, see [Webview](#webview)): they never reach `WebMessageReceived`, so don't use that prefix for your own messages. Any page loaded in the window can send them, and so move, resize, maximize, minimize or close it: if the window shows untrusted pages, call `SetDragRegionsEnabled(false)` before `WaitForClose()` (no script, and the `__rustino:` messages reach `WebMessageReceived` like the others, except `__rustino:print`, which only prints).
 
