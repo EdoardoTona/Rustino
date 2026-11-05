@@ -795,6 +795,47 @@ The safe area of the title bar, the strip free of buttons, has the variables of 
 
 The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`), and on Windows 11 the Snap Layouts flyout doesn't open from the maximize button (Win+Z still works). On macOS `SetTitleBarOverlay` is ignored, and the traffic lights keep the system's colors.
 
+The variables above are set by Rustino, on `<html>` as inline styles: the page reads them, and changes the height with `SetTitleBarOverlayHeight`, not by overriding them. The look of the buttons drawn on Windows and Linux is the page's instead, with these variables, set on `:root` or on `rustino-window-controls` (each falls back to the platform's look):
+
+| Variable | Windows default | Linux default |
+|---|---|---|
+| `--rustino-window-controls-color` | black, white in dark theme | black, white in dark theme |
+| `--rustino-window-controls-button-width` / `-button-height` | `46px` / `100%` | `24px` / `24px` |
+| `--rustino-window-controls-button-radius` | `0` | `50%` |
+| `--rustino-window-controls-gap` / `-padding` (sides) | `0px` / `0px` | `12px` / `8px` |
+| `--rustino-window-controls-icon-size` | `10px` | `16px` |
+| `--rustino-window-controls-font` (icon font) | `'Segoe Fluent Icons', 'Segoe MDL2 Assets'` | — (SVG icons) |
+| `--rustino-window-controls-background` | `transparent` | 10% of the color |
+| `--rustino-window-controls-hover-background` / `-active-background` | 20% / 30% grey | 15% / 30% of the color |
+| `--rustino-window-controls-close-hover-background` / `-close-hover-color` | `#c42b1c` / `#fff` | as the other buttons |
+| `--rustino-window-controls-disabled-opacity` | `.35` | `.35` |
+
+```css
+:root {
+  --rustino-window-controls-color: #e0e0e0;
+  --rustino-window-controls-button-width: 40px;
+  --rustino-window-controls-icon-size: 12px;
+}
+```
+
+On Windows the icons are the glyphs of the Segoe icon fonts (U+E921 minimize, U+E922 maximize, U+E923 restore, U+E8BB close): `--rustino-window-controls-font` replaces the font, for instance with an `@font-face` of the page that has its own glyphs at those code points, and the icons keep the color of the button.
+
+```css
+@font-face { font-family: 'My Caption Icons'; src: url('/fonts/caption-icons.woff2'); }
+:root {
+  --rustino-window-controls-font: 'My Caption Icons';
+  --rustino-window-controls-icon-size: 12px;
+}
+```
+
+For anything else the buttons are CSS parts: `::part(button)` for all of them, `::part(minimize)`, `::part(maximize)`, `::part(close)`, `::part(restore)` for maximize while the window is maximized, and `::part(icon)` for the glyph or the SVG. Parts take `:hover`, `:active`, `:focus-visible` and `:disabled`, and the page's rules win over the built-in ones:
+
+```css
+rustino-window-controls::part(button) { transition: background .1s; }
+rustino-window-controls::part(close):hover { background: #e81123; }
+rustino-window-controls::part(restore) { opacity: .8; }
+```
+
 The variables are CSS pixels and follow the page zoom (`SetZoom`, zoom hotkeys): on macOS, where the traffic lights don't zoom with the page, a zoomed out page gets larger values and a zoomed in one smaller ones, so the room stays the same on screen.
 
 On macOS 26 the traffic lights of an app look like those of the system apps (larger and further apart, 23 points from one to the next instead of 20) only when its executable was linked with the macOS 26 SDK. The executables of .NET apps are the `dotnet` host or the app's apphost, which Microsoft links with an older SDK (15.5 up to .NET 11), so macOS shows them the traffic lights of macOS 15. Rustino measures the traffic lights, so the variables fit either look. Setting the SDK version in the apphost after publishing gives the new look, a trick that works but that Microsoft doesn't support: macOS then applies all the behavior meant for apps built for macOS 26, not only the new traffic lights, so test the app with it. Run it before code signing, which it invalidates, keeping the minimum macOS version of the apphost (`minos` in `vtool -show-build`: 12.0 on .NET 10, 14.0 on .NET 11):

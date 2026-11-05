@@ -123,13 +123,47 @@
     close: 'Close',
   };
 
+  // Customization, from the page's CSS:
+  // - variables (inherited from <html>, or set on `rustino-window-controls`):
+  //   --rustino-window-controls-color, -button-width, -button-height, -button-radius, -gap,
+  //   -padding, -icon-size, -font (Windows: the icon font, with the Segoe glyphs), -background,
+  //   -hover-background, -active-background, -close-hover-background, -close-hover-color,
+  //   -disabled-opacity
+  // - parts, for anything else: `rustino-window-controls::part(button)`, `::part(minimize)`,
+  //   `::part(maximize)`, `::part(restore)` (maximize of a maximized window), `::part(close)`
+  //   and `::part(icon)`; the buttons take :hover, :active, :focus-visible and :disabled.
+  // Inside the shadow root the variables fall back to the platform defaults below.
+
   // `all: unset` on the buttons also drops the focus ring: keyboard users get it back
   const COMMON_CSS = `
-    :host { color: var(--rustino-window-controls-color, #000); }
+    :host {
+      position: fixed; top: 0; z-index: 2147483647;
+      display: flex; align-items: center;
+      gap: var(--rustino-window-controls-gap, var(--gap));
+      padding: 0 var(--rustino-window-controls-padding, var(--padding));
+      box-sizing: border-box;
+      user-select: none;
+      color: var(--rustino-window-controls-color, #000);
+    }
     @media (prefers-color-scheme: dark) {
       :host { color: var(--rustino-window-controls-color, #fff); }
     }
+    button {
+      all: unset;
+      width: var(--rustino-window-controls-button-width, var(--button-width));
+      height: var(--rustino-window-controls-button-height, var(--button-height));
+      border-radius: var(--rustino-window-controls-button-radius, var(--button-radius));
+      display: flex; align-items: center; justify-content: center;
+      background: var(--rustino-window-controls-background, var(--background));
+    }
+    button:hover { background: var(--rustino-window-controls-hover-background, var(--hover-background)); }
+    button:active { background: var(--rustino-window-controls-active-background, var(--active-background)); }
     button:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+    button:disabled {
+      background: var(--rustino-window-controls-background, var(--background));
+      color: inherit;
+      opacity: var(--rustino-window-controls-disabled-opacity, .35);
+    }
   `;
 
   /** Drawn controls per platform: default title bar height and style. */
@@ -138,40 +172,49 @@
       height: 32,
       css: COMMON_CSS + `
         :host {
-          position: fixed; top: 0; z-index: 2147483647;
-          display: flex;
-          user-select: none;
-          font: 10px 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+          --gap: 0px; --padding: 0px;
+          --button-width: 46px; --button-height: 100%; --button-radius: 0;
+          --icon-size: 10px;
+          --background: transparent;
+          --hover-background: rgba(128, 128, 128, .2);
+          --active-background: rgba(128, 128, 128, .3);
         }
-        button {
-          all: unset;
-          width: 46px; height: 100%;
-          display: flex; align-items: center; justify-content: center;
+        .icon {
+          font: var(--rustino-window-controls-icon-size, var(--icon-size))/1
+            var(--rustino-window-controls-font, 'Segoe Fluent Icons', 'Segoe MDL2 Assets');
         }
-        button:hover { background: rgba(128, 128, 128, .2); }
-        button:active { background: rgba(128, 128, 128, .3); }
-        button.close:hover, button.close:active { background: #c42b1c; color: #fff; }
-        button:disabled { background: none; color: inherit; opacity: .35; }
+        button.close:hover:not(:disabled), button.close:active:not(:disabled) {
+          background: var(--rustino-window-controls-close-hover-background, #c42b1c);
+          color: var(--rustino-window-controls-close-hover-color, #fff);
+        }
       `,
     },
     gnome: {
       height: 40,
       css: COMMON_CSS + `
         :host {
-          position: fixed; top: 0; z-index: 2147483647;
-          display: flex; align-items: center; gap: 12px;
-          height: 40px; padding: 0 8px; box-sizing: border-box;
-          user-select: none;
+          --gap: 12px; --padding: 8px;
+          --button-width: 24px; --button-height: 24px; --button-radius: 50%;
+          --icon-size: 16px;
+          --background: color-mix(in srgb, currentColor 10%, transparent);
+          --hover-background: color-mix(in srgb, currentColor 15%, transparent);
+          --active-background: color-mix(in srgb, currentColor 30%, transparent);
         }
-        button {
-          all: unset;
-          width: 24px; height: 24px; border-radius: 50%;
-          display: flex; align-items: center; justify-content: center;
-          background: color-mix(in srgb, currentColor 10%, transparent);
+        .icon {
+          width: var(--rustino-window-controls-icon-size, var(--icon-size));
+          height: var(--rustino-window-controls-icon-size, var(--icon-size));
+          fill: none; stroke: currentColor; stroke-width: 1.5;
         }
-        button:hover { background: color-mix(in srgb, currentColor 15%, transparent); }
-        button:active { background: color-mix(in srgb, currentColor 30%, transparent); }
-        svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+        button.close:hover:not(:disabled) {
+          background: var(--rustino-window-controls-close-hover-background,
+            var(--rustino-window-controls-hover-background, var(--hover-background)));
+          color: var(--rustino-window-controls-close-hover-color, inherit);
+        }
+        button.close:active:not(:disabled) {
+          background: var(--rustino-window-controls-close-hover-background,
+            var(--rustino-window-controls-active-background, var(--active-background)));
+          color: var(--rustino-window-controls-close-hover-color, inherit);
+        }
       `,
     },
   };
@@ -184,18 +227,29 @@
     '--rustino-titlebar-area-height',
   ];
 
-  /** The shadow hosts of the controls, by side. */
+  /** The shadow hosts of the controls, by side, and their widths in the CSS variables. */
   const hosts = {};
+  const hostWidths = {};
   let lastControls = null;
+
+  // The page's CSS can resize the controls after they are drawn (button width, gap, padding,
+  // a stylesheet that loads later): the room left for them follows
+  const hostResizeObserver = new ResizeObserver(() => {
+    const changed = ['left', 'right'].some((side) =>
+      hosts[side] && hosts[side].isConnected && hosts[side].offsetWidth !== hostWidths[side]);
+    if (changed) renderControls(lastControls);
+  });
 
   const buttonHtml = (button, controls) => {
     const icon = button.kind === 'maximize' && controls.maximized ? 'restore' : button.kind;
     const label = LABELS[icon];
     // The glyphs and the icons are hidden from screen readers: the label names the button
     const content = controls.platform === 'windows'
-      ? `<span aria-hidden="true">${GLYPHS[icon]}</span>`
-      : `<svg viewBox="0 0 16 16" aria-hidden="true">${ICONS[icon]}</svg>`;
-    return `<button type="button" class="${button.kind}" data-action="${button.kind}"` +
+      ? `<span class="icon" part="icon" aria-hidden="true">${GLYPHS[icon]}</span>`
+      : `<svg class="icon" part="icon" viewBox="0 0 16 16" aria-hidden="true">${ICONS[icon]}</svg>`;
+    // `restore` is a part of its own: ::part() can't be combined with attribute selectors
+    const parts = icon === 'restore' ? 'button maximize restore' : 'button ' + button.kind;
+    return `<button type="button" class="${button.kind}" part="${parts}" data-action="${button.kind}"` +
       ` aria-label="${label}" title="${label}"${button.enabled ? '' : ' disabled'}>${content}</button>`;
   };
 
@@ -206,6 +260,8 @@
       const button = e.target.closest('button');
       if (button && !button.disabled) post(button.dataset.action);
     });
+    // The border box, as offsetWidth: a change of the padding alone keeps the content box
+    hostResizeObserver.observe(host, { box: 'border-box' });
     return host;
   };
 
@@ -238,7 +294,7 @@
       host.style.color = controls.color || '';
       host.style.height = height + 'px';
       if (!host.isConnected) root.appendChild(host);
-      widths[side] = host.offsetWidth;
+      widths[side] = hostWidths[side] = host.offsetWidth;
       root.style.setProperty(property, widths[side] + 'px');
     }
 
