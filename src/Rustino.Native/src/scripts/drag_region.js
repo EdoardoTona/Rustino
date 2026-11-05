@@ -116,6 +116,7 @@
     close: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
   };
 
+  /** Fallback when the native side sends no labels in the language of the OS. */
   const LABELS = {
     minimize: 'Minimize',
     maximize: 'Maximize',
@@ -247,9 +248,12 @@
     if (changed) renderControls(lastControls);
   });
 
+  /** The labels come from the OS translations: escaped for the attributes. */
+  const escapeHtml = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
   const buttonHtml = (button, controls) => {
     const icon = button.kind === 'maximize' && controls.maximized ? 'restore' : button.kind;
-    const label = LABELS[icon];
+    const label = escapeHtml((controls.labels && controls.labels[icon]) || LABELS[icon]);
     // The glyphs and the icons are hidden from screen readers: the label names the button
     const content = controls.platform === 'windows'
       ? `<span class="icon" part="icon" aria-hidden="true">${GLYPHS[icon]}</span>`

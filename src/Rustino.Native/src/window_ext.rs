@@ -87,6 +87,61 @@ struct WindowControls {
     native_left: u32,
     /// Physical pixels per point: the script takes the page zoom out of it and devicePixelRatio
     scale_factor: f64,
+    /// Labels of the buttons in the language of the OS; `None` keeps the script's English ones
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<ControlLabels>,
+}
+
+/// Accessible names and tooltips of the window controls.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+struct ControlLabels {
+    minimize: String,
+    maximize: String,
+    restore: String,
+    close: String,
+}
+
+/// The labels of the caption buttons in the system menu, as Windows localizes them
+/// ("&Minimize", "&Close\tAlt+F4"): without the mnemonic and the shortcut.
+#[cfg(target_os = "windows")]
+fn control_labels(hwnd: isize) -> Option<ControlLabels> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetMenuStringW, GetSystemMenu, MF_BYCOMMAND, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
+    };
+    let menu = unsafe { GetSystemMenu(HWND(hwnd as _), false) };
+    if menu.is_invalid() {
+        return None;
+    }
+    let label = |command: u32| -> Option<String> {
+        let mut buffer = [0u16; 128];
+        let len = unsafe { GetMenuStringW(menu, command, Some(&mut buffer), MF_BYCOMMAND) };
+        if len <= 0 {
+            return None;
+        }
+        let text = String::from_utf16_lossy(&buffer[..len as usize]);
+        let text = text.split('\t').next().unwrap_or_default().replace('&', "");
+        Some(text.trim().to_string()).filter(|t| !t.is_empty())
+    };
+    Some(ControlLabels {
+        minimize: label(SC_MINIMIZE)?,
+        maximize: label(SC_MAXIMIZE)?,
+        restore: label(SC_RESTORE)?,
+        close: label(SC_CLOSE)?,
+    })
+}
+
+/// GTK's own translations of the labels of its header bar buttons.
+#[cfg(target_os = "linux")]
+fn control_labels() -> Option<ControlLabels> {
+    let label = |text: &str| gtk::glib::dgettext(Some("gtk30"), text).to_string();
+    Some(ControlLabels {
+        minimize: label("Minimize"),
+        maximize: label("Maximize"),
+        restore: label("Restore"),
+        close: label("Close"),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -715,6 +770,10 @@ impl WindowExtRuntime {
                     right: right.collect(),
                     native_left: 0,
                     scale_factor: window.scale_factor(),
+                    labels: {
+                        use tao::platform::windows::WindowExtWindows;
+                        control_labels(window.hwnd())
+                    },
                 }
             };
             // GTK places the buttons of the decoration layout and hides the disabled ones
@@ -737,6 +796,7 @@ impl WindowExtRuntime {
                     right: buttons(right),
                     native_left: 0,
                     scale_factor: window.scale_factor(),
+                    labels: control_labels(),
                 }
             };
             Some(controls)
@@ -837,6 +897,7 @@ impl MacTitleBar {
             right: Vec::new(),
             native_left: (lights.right + lights.left).round() as u32,
             scale_factor: window.scale_factor(),
+            labels: None,
         })
     }
 
@@ -1393,11 +1454,17 @@ mod tests {
                 right: vec![ControlButton { kind: "close", enabled: false }],
                 native_left: 0,
                 scale_factor: 1.0,
+                labels: Some(ControlLabels {
+                    minimize: "Riduci a icona".into(),
+                    maximize: "Ingrandisci".into(),
+                    restore: "Ripristina".into(),
+                    close: "Chiudi".into(),
+                }),
             }),
         };
         assert_eq!(
             serde_json::to_string(&chrome).unwrap(),
-            r#"{"border":6,"controls":{"platform":"windows","maximized":true,"color":"rgba(224,224,224,1)","height":48,"left":[],"right":[{"kind":"close","enabled":false}],"native_left":0,"scale_factor":1.0}}"#
+            r#"{"border":6,"controls":{"platform":"windows","maximized":true,"color":"rgba(224,224,224,1)","height":48,"left":[],"right":[{"kind":"close","enabled":false}],"native_left":0,"scale_factor":1.0,"labels":{"minimize":"Riduci a icona","maximize":"Ingrandisci","restore":"Ripristina","close":"Chiudi"}}}"#
         );
         // macOS: no buttons, only room for the traffic lights
         let chrome = ChromeState {
@@ -1411,6 +1478,7 @@ mod tests {
                 right: Vec::new(),
                 native_left: 72,
                 scale_factor: 2.0,
+                labels: None,
             }),
         };
         assert_eq!(

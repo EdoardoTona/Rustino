@@ -550,6 +550,33 @@ var menu = new RustinoMenu()
 
 The predefined `About` item opens the native About panel with the window icon and the values of `SetAboutName`, `SetAboutVersion`, `SetAboutCopyright`, `SetAboutComments`, `AddAboutAuthor`, `SetAboutWebsite` and `SetAboutLicense` (the macOS panel shows the last four as credits). Without `SetAboutName`, macOS uses the app name shown in the menu bar. The values are read when a menu is set: after changing them (or the icon) at runtime, call `SetMenu` again. For a fully custom About, use a normal item and handle `MenuItemClicked`.
 
+The default macOS menus (application, Edit, Window) and the predefined items without a label are in English. To translate them, set your own menu bar with the labels in the app's language:
+
+```csharp
+var menu = new RustinoMenu()
+    .AddAppMenu(app => app
+        .AddPredefinedItem(PredefinedMenuItem.About, "Informazioni su MyApp")
+        .AddSeparator()
+        .AddPredefinedItem(PredefinedMenuItem.Hide, "Nascondi MyApp")
+        .AddPredefinedItem(PredefinedMenuItem.HideOthers, "Nascondi altre")
+        .AddPredefinedItem(PredefinedMenuItem.ShowAll, "Mostra tutte")
+        .AddSeparator()
+        .AddPredefinedItem(PredefinedMenuItem.Quit, "Esci da MyApp"))
+    .AddSubmenu("Modifica", edit => edit
+        .AddPredefinedItem(PredefinedMenuItem.Undo, "Annulla")
+        .AddPredefinedItem(PredefinedMenuItem.Redo, "Ripeti")
+        .AddSeparator()
+        .AddPredefinedItem(PredefinedMenuItem.Cut, "Taglia")
+        .AddPredefinedItem(PredefinedMenuItem.Copy, "Copia")
+        .AddPredefinedItem(PredefinedMenuItem.Paste, "Incolla")
+        .AddPredefinedItem(PredefinedMenuItem.SelectAll, "Seleziona tutto"))
+    .AddWindowMenu("Finestra", window => window
+        .AddPredefinedItem(PredefinedMenuItem.Minimize, "Contrai")
+        .AddPredefinedItem(PredefinedMenuItem.Maximize, "Zoom")
+        .AddSeparator()
+        .AddPredefinedItem(PredefinedMenuItem.BringAllToFront, "Porta tutto in primo piano"));
+```
+
 Support depends on the platform (muda):
 
 | Predefined item | macOS | Windows | Linux |
@@ -793,7 +820,7 @@ The safe area of the title bar, the strip free of buttons, has the variables of 
 
 `SetTitleBarOverlayHeight(48)` makes the title bar taller, for instance for tabs or a search box: on Windows the buttons stretch to the new height, like the caption buttons of VS Code, on Linux the round buttons stay centered, on macOS the traffic lights are centered, as far from the left edge as from the top, and the variables follow. `SetMacTrafficLightPosition` places the traffic lights elsewhere, and the variables follow them.
 
-The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`). On Windows 11 hovering the maximize button opens the Snap Layouts flyout, like a native title bar: Rustino puts a transparent native window over the button, which follows its position and size (page CSS and zoom included), so the mouse on the button is seen by Windows rather than by the page. On macOS `SetTitleBarOverlay` is ignored, and the traffic lights keep the system's colors.
+The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. Their tooltips and accessible names are in the language of the OS: the labels of the window's system menu on Windows, GTK's translations on Linux. They need drag regions (`SetDragRegionsEnabled`). On Windows 11 hovering the maximize button opens the Snap Layouts flyout, like a native title bar: Rustino puts a transparent native window over the button, which follows its position and size (page CSS and zoom included), so the mouse on the button is seen by Windows rather than by the page. On macOS `SetTitleBarOverlay` is ignored, and the traffic lights keep the system's colors.
 
 The variables above are set by Rustino, on `<html>` as inline styles: the page reads them, and changes the height with `SetTitleBarOverlayHeight`, not by overriding them. The look of the buttons drawn on Windows and Linux is the page's instead, with these variables, set on `:root` or on `rustino-window-controls` (each falls back to the platform's look):
 
