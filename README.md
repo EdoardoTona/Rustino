@@ -793,7 +793,7 @@ The safe area of the title bar, the strip free of buttons, has the variables of 
 
 `SetTitleBarOverlayHeight(48)` makes the title bar taller, for instance for tabs or a search box: on Windows the buttons stretch to the new height, like the caption buttons of VS Code, on Linux the round buttons stay centered, on macOS the traffic lights are centered, as far from the left edge as from the top, and the variables follow. `SetMacTrafficLightPosition` places the traffic lights elsewhere, and the variables follow them.
 
-The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`), and on Windows 11 the Snap Layouts flyout doesn't open from the maximize button (Win+Z still works). On macOS `SetTitleBarOverlay` is ignored, and the traffic lights keep the system's colors.
+The buttons are black or white after `prefers-color-scheme` (the theme of the window, see `SetTheme`), not after the page's colors: a page with its own palette sets `--rustino-window-controls-color` in its CSS, and `SetTitleBarOverlayColor` sets one from the host, over the CSS and across page loads (handy with Blazor Hybrid); `ResetTitleBarOverlayColor` goes back to the page's. They need drag regions (`SetDragRegionsEnabled`). On Windows 11 hovering the maximize button opens the Snap Layouts flyout, like a native title bar: Rustino puts a transparent native window over the button, which follows its position and size (page CSS and zoom included), so the mouse on the button is seen by Windows rather than by the page. On macOS `SetTitleBarOverlay` is ignored, and the traffic lights keep the system's colors.
 
 The variables above are set by Rustino, on `<html>` as inline styles: the page reads them, and changes the height with `SetTitleBarOverlayHeight`, not by overriding them. The look of the buttons drawn on Windows and Linux is the page's instead, with these variables, set on `:root` or on `rustino-window-controls` (each falls back to the platform's look):
 
@@ -834,6 +834,13 @@ For anything else the buttons are CSS parts: `::part(button)` for all of them, `
 rustino-window-controls::part(button) { transition: background .1s; }
 rustino-window-controls::part(close):hover { background: #e81123; }
 rustino-window-controls::part(restore) { opacity: .8; }
+```
+
+On Windows the mouse on maximize reaches the Snap Layouts window, not the page, so `:hover` and `:active` don't apply to that button: while it's hovered or pressed it gets the parts `snap-hover` and `snap-pressed` instead, to style alongside the pseudo-classes:
+
+```css
+rustino-window-controls::part(maximize):hover,
+rustino-window-controls::part(maximize snap-hover) { background: #0078d4; }
 ```
 
 The variables are CSS pixels and follow the page zoom (`SetZoom`, zoom hotkeys): on macOS, where the traffic lights don't zoom with the page, a zoomed out page gets larger values and a zoomed in one smaller ones, so the room stays the same on screen.

@@ -132,6 +132,8 @@
   // - parts, for anything else: `rustino-window-controls::part(button)`, `::part(minimize)`,
   //   `::part(maximize)`, `::part(restore)` (maximize of a maximized window), `::part(close)`
   //   and `::part(icon)`; the buttons take :hover, :active, :focus-visible and :disabled.
+  //   On Windows maximize also gets `::part(snap-hover)` / `::part(snap-pressed)` while the mouse
+  //   is on the Snap Layouts window over it, where :hover and :active don't apply.
   // Inside the shadow root the variables fall back to the platform defaults below.
 
   // `all: unset` on the buttons also drops the focus ring: keyboard users get it back
@@ -328,6 +330,13 @@
   let snapRect = '';
   let snapState = '';
 
+  /** Shows the state on maximize as data-snap-state (built-in CSS) and as the parts snap-hover / snap-pressed (page CSS). */
+  const applySnapState = (button) => {
+    button.dataset.snapState = snapState;
+    button.part.toggle('snap-hover', snapState === 'hover');
+    button.part.toggle('snap-pressed', snapState === 'pressed');
+  };
+
   const maximizeButton = () => {
     if (!lastControls || lastControls.platform !== 'windows') return null;
     for (const side of ['left', 'right']) {
@@ -353,7 +362,7 @@
     }
     let rect = '';
     if (button) {
-      button.dataset.snapState = snapState;
+      applySnapState(button);
       const r = button.getBoundingClientRect();
       const x = Math.round(r.left * devicePixelRatio);
       const y = Math.round(r.top * devicePixelRatio);
@@ -370,7 +379,7 @@
   const setSnapButtonState = (state) => {
     snapState = state;
     const button = maximizeButton();
-    if (button) button.dataset.snapState = state;
+    if (button) applySnapState(button);
   };
 
   // The page zoom changes the size of the viewport, and so the size of the native controls; the
