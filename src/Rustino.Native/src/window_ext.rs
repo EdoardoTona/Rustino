@@ -197,6 +197,13 @@ pub enum WindowCommand {
     /// The GTK theme settings changed (tao reports theme changes only on Windows and macOS)
     #[cfg(target_os = "linux")]
     CheckTheme,
+    /// Position of the maximize button drawn by the script, in physical pixels: the Snap Layouts
+    /// window goes over it
+    #[cfg(target_os = "windows")]
+    SetSnapButtonRect(Option<[i32; 4]>),
+    /// Hover and press on the Snap Layouts window, for the script to show on the button
+    #[cfg(target_os = "windows")]
+    SnapButtonState(crate::snap_layouts::SnapButtonState),
     /// AppKit may lay out the title bar again after the traffic lights moved, putting them back
     #[cfg(target_os = "macos")]
     CheckTrafficLights,
@@ -329,6 +336,10 @@ impl WindowExt {
             },
             #[cfg(target_os = "linux")]
             _theme_watch: GtkThemeWatch::new(proxy),
+            #[cfg(target_os = "windows")]
+            proxy,
+            #[cfg(target_os = "windows")]
+            snap_button: None,
         }
     }
 }
@@ -384,6 +395,10 @@ pub struct WindowExtRuntime {
     mac_title_bar: MacTitleBar,
     #[cfg(target_os = "linux")]
     _theme_watch: Option<GtkThemeWatch>,
+    #[cfg(target_os = "windows")]
+    proxy: CommandProxy,
+    #[cfg(target_os = "windows")]
+    snap_button: Option<crate::snap_layouts::SnapButton>,
 }
 
 impl WindowExtRuntime {
@@ -599,7 +614,31 @@ impl WindowExtRuntime {
                     self.chrome_dirty = true;
                 }
             }
-            WindowCommand::PageReady => self.update_chrome(window, webview, true),
+            WindowCommand::PageReady => {
+                // A new page: the script reports its maximize button again
+                #[cfg(target_os = "windows")]
+                if let Some(button) = &self.snap_button {
+                    button.set_rect(None);
+                }
+                self.update_chrome(window, webview, true)
+            }
+            #[cfg(target_os = "windows")]
+            WindowCommand::SetSnapButtonRect(rect) => {
+                use tao::platform::windows::WindowExtWindows;
+                if self.snap_button.is_none() && rect.is_some() {
+                    self.snap_button = crate::snap_layouts::SnapButton::new(window.hwnd(), self.proxy.clone());
+                }
+                if let Some(button) = &self.snap_button {
+                    button.set_rect(rect);
+                }
+            }
+            #[cfg(target_os = "windows")]
+            WindowCommand::SnapButtonState(state) => {
+                let _ = webview.evaluate_script(&format!(
+                    "window.__rustino_window && window.__rustino_window.setSnapButtonState('{}')",
+                    state.as_str()
+                ));
+            }
             #[cfg(target_os = "linux")]
             WindowCommand::CheckTheme => self.theme_changed(window.theme()),
             #[cfg(target_os = "macos")]
@@ -1131,6 +1170,14 @@ pub fn direction_from_i32(direction: i32) -> Option<ResizeDirection> {
     })
 }
 
+/// "x,y,width,height" in physical pixels, or nothing when the page shows no maximize button
+#[cfg(target_os = "windows")]
+fn parse_snap_rect(rect: &str) -> Option<[i32; 4]> {
+    let mut values = rect.split(',').map(|value| value.parse::<i32>().ok());
+    let rect = [values.next()??, values.next()??, values.next()??, values.next()??];
+    values.next().is_none().then_some(rect)
+}
+
 fn parse_ipc_message(message: &str) -> Option<WindowCommand> {
     Some(match message.strip_prefix(IPC_PREFIX)? {
         "drag" => WindowCommand::DragWindow,
@@ -1138,6 +1185,8 @@ fn parse_ipc_message(message: &str) -> Option<WindowCommand> {
         "ready" => WindowCommand::PageReady,
         "minimize" => WindowCommand::Minimize,
         "close" => WindowCommand::RequestClose,
+        #[cfg(target_os = "windows")]
+        other if other.starts_with("snap:") => WindowCommand::SetSnapButtonRect(parse_snap_rect(&other[5..])),
         other => {
             let direction = match other.strip_prefix("resize:")? {
                 "n" => ResizeDirection::North,

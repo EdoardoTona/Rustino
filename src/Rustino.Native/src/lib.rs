@@ -22,6 +22,8 @@ mod menu;
 mod parent;
 mod safe_storage;
 mod splash;
+#[cfg(target_os = "windows")]
+mod snap_layouts;
 mod state;
 mod util;
 mod webview_ext;

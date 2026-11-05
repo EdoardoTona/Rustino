@@ -156,8 +156,13 @@
       display: flex; align-items: center; justify-content: center;
       background: var(--rustino-window-controls-background, var(--background));
     }
-    button:hover { background: var(--rustino-window-controls-hover-background, var(--hover-background)); }
-    button:active { background: var(--rustino-window-controls-active-background, var(--active-background)); }
+    /* data-snap-state: the mouse on the Snap Layouts window over maximize (Windows), which the page doesn't see */
+    button:hover, button[data-snap-state="hover"] {
+      background: var(--rustino-window-controls-hover-background, var(--hover-background));
+    }
+    button:active, button[data-snap-state="pressed"] {
+      background: var(--rustino-window-controls-active-background, var(--active-background));
+    }
     button:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
     button:disabled {
       background: var(--rustino-window-controls-background, var(--background));
@@ -300,6 +305,7 @@
 
     // Safe area of the title bar: the strip free of window controls, as the titlebar-area-*
     // environment variables of the Window Controls Overlay
+    reportSnapButton();
     if (!controls) {
       for (const name of TITLEBAR_PROPERTIES) root.style.removeProperty(name);
       return;
@@ -314,9 +320,64 @@
     TITLEBAR_PROPERTIES.forEach((name, i) => root.style.setProperty(name, values[i]));
   };
 
-  // The page zoom changes the size of the viewport, and so the size of the native controls
+  // ---------------------------------------------------------------------------------------------
+  // Snap Layouts (Windows)
+  // ---------------------------------------------------------------------------------------------
+
+  /** The rect last sent for the Snap Layouts window, and the state it reports. */
+  let snapRect = '';
+  let snapState = '';
+
+  const maximizeButton = () => {
+    if (!lastControls || lastControls.platform !== 'windows') return null;
+    for (const side of ['left', 'right']) {
+      const button = hosts[side] && hosts[side].isConnected &&
+        hosts[side].shadowRoot.querySelector('button.maximize:not(:disabled)');
+      if (button) return button;
+    }
+    return null;
+  };
+
+  // The page's CSS can resize the button alone (its height): the Snap Layouts window follows.
+  // Moves come with a change of the host width or of the window size, which report too
+  let observedButton = null;
+  const snapButtonObserver = new ResizeObserver(() => reportSnapButton());
+
+  /** Puts the Snap Layouts window over maximize, in physical pixels of the viewport. */
+  const reportSnapButton = () => {
+    const button = maximizeButton();
+    if (button !== observedButton) {
+      if (observedButton) snapButtonObserver.unobserve(observedButton);
+      if (button) snapButtonObserver.observe(button, { box: 'border-box' });
+      observedButton = button;
+    }
+    let rect = '';
+    if (button) {
+      button.dataset.snapState = snapState;
+      const r = button.getBoundingClientRect();
+      const x = Math.round(r.left * devicePixelRatio);
+      const y = Math.round(r.top * devicePixelRatio);
+      const width = Math.round(r.right * devicePixelRatio) - x;
+      const height = Math.round(r.bottom * devicePixelRatio) - y;
+      rect = [x, y, width, height].join(',');
+    }
+    if (rect !== snapRect) {
+      snapRect = rect;
+      post('snap:' + rect);
+    }
+  };
+
+  const setSnapButtonState = (state) => {
+    snapState = state;
+    const button = maximizeButton();
+    if (button) button.dataset.snapState = state;
+  };
+
+  // The page zoom changes the size of the viewport, and so the size of the native controls; the
+  // window width moves the buttons on the right
   addEventListener('resize', () => {
     if (lastControls && !STYLES[lastControls.platform]) renderControls(lastControls);
+    reportSnapButton();
   });
 
   // ---------------------------------------------------------------------------------------------
@@ -331,6 +392,6 @@
     else addEventListener('DOMContentLoaded', () => renderControls(state.controls), { once: true });
   };
 
-  Object.defineProperty(window, '__rustino_window', { value: Object.freeze({ setState }) });
+  Object.defineProperty(window, '__rustino_window', { value: Object.freeze({ setState, setSnapButtonState }) });
   post('ready');
 })();
