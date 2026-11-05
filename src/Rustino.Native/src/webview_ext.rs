@@ -32,13 +32,7 @@ const NO_CONTEXT_MENU_SCRIPT: &str =
 /// its preview inside the page, cut by small windows, and WKWebView nothing (WebKitGTK already
 /// shows the dialog). Frames without `window.ipc` keep the original.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-const PRINT_SCRIPT: &str = r#"(() => {
-  const print = window.print;
-  window.print = function () {
-    if (window.ipc) window.ipc.postMessage('__rustino:print');
-    else print.call(window);
-  };
-})();"#;
+const PRINT_SCRIPT: &str = include_str!("scripts/print.js");
 
 /// The message of `PRINT_SCRIPT`.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
