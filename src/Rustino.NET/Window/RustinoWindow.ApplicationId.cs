@@ -55,6 +55,9 @@ public partial class RustinoWindow
     [DllImport("libSystem.dylib")]
     private static extern IntPtr dlopen(string path, int mode);
 
+    // The window icon is the Dock icon of an app that has none of its own (e.g. `dotnet app.dll`).
+    // An app bundle keeps the icon of its Info.plist, which macOS draws in the style of the
+    // system: an image set here would replace it, without that style, while the app runs.
     private static void SetMacDockIcon(string iconPath)
     {
         try
@@ -63,6 +66,9 @@ public partial class RustinoWindow
             {
                 dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", 1);
             }
+
+            if (MacBundleHasIcon())
+                return;
 
             IntPtr nsImageClass = objc_getClass("NSImage");
             if (nsImageClass == IntPtr.Zero)
@@ -124,6 +130,19 @@ public partial class RustinoWindow
         {
             Console.Error.WriteLine($"Failed to set macOS Dock icon: {ex}");
         }
+    }
+
+    private static bool MacBundleHasIcon()
+    {
+        IntPtr bundleClass = objc_getClass("NSBundle");
+        if (bundleClass == IntPtr.Zero)
+            return false;
+        IntPtr bundle = objc_msgSend(bundleClass, sel_registerName("mainBundle"));
+        if (bundle == IntPtr.Zero)
+            return false;
+        IntPtr infoValueSel = sel_registerName("objectForInfoDictionaryKey:");
+        return objc_msgSend(bundle, infoValueSel, CreateNSString("CFBundleIconFile")) != IntPtr.Zero
+            || objc_msgSend(bundle, infoValueSel, CreateNSString("CFBundleIconName")) != IntPtr.Zero;
     }
 
     private static bool IsDotnetTool()

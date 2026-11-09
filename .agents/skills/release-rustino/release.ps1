@@ -1,6 +1,17 @@
 # release.ps1 - Automated Release Script for Rustino
+#
+#   release.ps1 -Version 0.5.6
+#
+# The version is not stored in the repository: the release workflow gets it from here.
+
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')]
+    [string]$Version
+)
 
 $ErrorActionPreference = "Stop"
+$newVersion = $Version
 
 Write-Host "=== Starting Rustino Release Process ===" -ForegroundColor Cyan
 
@@ -21,38 +32,7 @@ if ($currentBranch -ne "development") {
 Write-Host "Pulling latest changes on development..." -ForegroundColor Gray
 git pull origin development
 
-# 4. Get current version and increment patch version
-$propsPath = "src/Directory.Build.props"
-if (-not (Test-Path $propsPath)) {
-    Write-Error "Could not find Directory.Build.props at '$propsPath'."
-}
-
-$content = Get-Content $propsPath -Raw
-if ($content -match '<Version>(\d+)\.(\d+)\.(\d+)(-.*)?</Version>') {
-    $major = $Matches[1]
-    $minor = $Matches[2]
-    $patch = [int]$Matches[3]
-    $suffix = $Matches[4]
-    
-    $newPatch = $patch + 1
-    $oldVersion = "$major.$minor.$patch$suffix"
-    $newVersion = "$major.$minor.$newPatch$suffix"
-    
-    Write-Host "Bumping version in Directory.Build.props: $oldVersion -> $newVersion" -ForegroundColor Green
-    $newContent = $content -replace "<Version>$oldVersion</Version>", "<Version>$newVersion</Version>"
-    Set-Content $propsPath -Value $newContent -NoNewline
-} else {
-    Write-Error "Could not parse version from Directory.Build.props."
-}
-
-# 5. Commit and push the version bump
-Write-Host "Committing version bump..." -ForegroundColor Gray
-git add $propsPath
-git commit -m "chore: bump patch version to $newVersion"
-Write-Host "Pushing version bump to origin/development..." -ForegroundColor Gray
-git push origin development
-
-# 6. Create PR from development to main
+# 4. Create PR from development to main
 Write-Host "Creating Pull Request from development into main..." -ForegroundColor Gray
 $prUrl = gh pr create --base main --head development --title "Release: Merge development into main (v$newVersion)" --body "Automated release PR for version $newVersion."
 if (-not $prUrl) {
@@ -60,11 +40,11 @@ if (-not $prUrl) {
 }
 Write-Host "Created PR: $prUrl" -ForegroundColor Green
 
-# 7. Post the required comment for Claude review (user rule)
+# 5. Post the required comment for Claude review (user rule)
 Write-Host "Requesting Claude review on the PR..." -ForegroundColor Gray
 gh pr comment $prUrl --body "@claude review this"
 
-# 8. Check mergeability and wait if needed
+# 6. Check mergeability and wait if needed
 Write-Host "Waiting for PR mergeability checks..." -ForegroundColor Gray
 $attempts = 0
 $maxAttempts = 12 # 60 seconds total
@@ -91,12 +71,12 @@ if (-not $isMergeable) {
     Write-Error "PR mergeability check timed out or is not mergeable. Please merge manually."
 }
 
-# 9. Merge development into main
+# 7. Merge development into main
 Write-Host "Merging PR into main..." -ForegroundColor Gray
 gh pr merge $prUrl --merge --delete-branch=$false
 Write-Host "Successfully merged PR into main!" -ForegroundColor Green
 
-# 10. Sync main back into development
+# 8. Sync main back into development
 Write-Host "Synchronizing branches (merging main back into development)..." -ForegroundColor Gray
 git checkout main
 git pull origin main
@@ -104,9 +84,9 @@ git checkout development
 git merge main --no-ff -m "Merge branch 'main' into development to sync [skip ci]"
 git push origin development
 
-# 11. Trigger release
-Write-Host "Triggering NuGet release workflow on main branch..." -ForegroundColor Gray
-gh workflow run release.yml --ref main
+# 9. Trigger release
+Write-Host "Triggering NuGet release workflow on main branch for version $newVersion..." -ForegroundColor Gray
+gh workflow run release.yml --ref main -f version=$newVersion
 Start-Sleep -Seconds 3
 gh run list --workflow=release.yml --limit 1
 

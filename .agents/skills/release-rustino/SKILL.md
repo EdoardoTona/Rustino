@@ -1,6 +1,6 @@
 ---
 name: release-rustino
-description: Switches to latest development branch, bumps the patch version in src/Directory.Build.props, creates a PR from development into main with @claude review, merges if no conflicts, syncs main back to development, and triggers the NuGet release.
+description: Switches to latest development branch, creates a PR from development into main with @claude review, merges if no conflicts, syncs main back to development, and triggers the NuGet release for the given version.
 ---
 
 # Rustino Release Automator
@@ -10,21 +10,22 @@ This skill automates the release preparation, branch merging, branch synchroniza
 ## Invocation
 
 ```bash
-/release-rustino
+/release-rustino <version>   # e.g. /release-rustino 0.5.6
 ```
+
+The version is not stored in the repository: ask for it when it is missing (the latest release is the
+newest `v*` tag).
 
 ## What This Skill Does
 
 1. **Ensures the workspace is clean** and checks out the `development` branch.
 2. **Pulls the latest updates** from `origin/development`.
-3. **Bumps the patch version** in `src/Directory.Build.props` (e.g. `0.3.4` -> `0.3.5`).
-4. **Commits and pushes** the version bump to `development`.
-5. **Creates a Pull Request** from `development` into `main` using the GitHub CLI (`gh`).
-6. **Requests review from @claude** bot on the PR by posting a comment with `@claude review this`.
-7. **Waits for mergeability checks** to ensure there are no conflicts.
-8. **Merges the PR** into `main`.
-9. **Synchronizes the branches** by switching to `main`, pulling, switching to `development`, merging `main`, and pushing.
-10. **Triggers the GitHub release workflow** (`release.yml`) on `main`.
+3. **Creates a Pull Request** from `development` into `main` using the GitHub CLI (`gh`).
+4. **Requests review from @claude** bot on the PR by posting a comment with `@claude review this`.
+5. **Waits for mergeability checks** to ensure there are no conflicts.
+6. **Merges the PR** into `main`.
+7. **Synchronizes the branches** by switching to `main`, pulling, switching to `development`, merging `main`, and pushing.
+8. **Triggers the GitHub release workflow** (`release.yml`) on `main` with the version to publish.
 
 ## Prerequisites
 
@@ -36,27 +37,21 @@ This skill automates the release preparation, branch merging, branch synchroniza
 You can execute the entire release flow automatically by running:
 
 ```powershell
-powershell -File .agents/skills/release-rustino/release.ps1
+powershell -File .agents/skills/release-rustino/release.ps1 -Version 0.5.6
 ```
 
 If you prefer to run it manually or need to troubleshoot a step, follow the steps below:
 
-### Phase 1 — Switch and Bump Version
+### Phase 1 — Switch to development
 ```powershell
 git checkout development
 git pull origin development
-
-# Edit src/Directory.Build.props to increment the patch version (e.g., <Version>0.3.5</Version>)
-# Commit and push:
-git add src/Directory.Build.props
-git commit -m "chore: bump patch version to 0.3.5"
-git push origin development
 ```
 
 ### Phase 2 — Create PR and Request Review
 Create the Pull Request and comment for Claude review:
 ```powershell
-gh pr create --base main --head development --title "Release: Merge development into main (v0.3.5)" --body "Automated release PR."
+gh pr create --base main --head development --title "Release: Merge development into main (v0.5.6)" --body "Automated release PR."
 # Note down the PR URL/number returned, then comment:
 gh pr comment <PR_URL> --body "@claude review this"
 ```
@@ -78,7 +73,7 @@ git push origin development
 
 ### Phase 5 — Trigger Release
 ```powershell
-gh workflow run release.yml --ref main
+gh workflow run release.yml --ref main -f version=0.5.6
 # Check status:
 gh run list --workflow=release.yml --limit 1
 ```

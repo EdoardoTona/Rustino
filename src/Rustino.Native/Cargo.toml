@@ -2,6 +2,8 @@
 name = "rustino_native"
 version = "0.1.0"
 edition = "2024"
+# The highest requirement of the dependencies (muda, tray-icon)
+rust-version = "1.90"
 license = "MIT"
 description = "Cross-platform native webview library powered by wry and tao"
 

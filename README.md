@@ -95,7 +95,7 @@ For Blazor apps, replace `Photino.Blazor` with [`Rustino.Blazor`](#blazor-hybrid
 | `SetTransparent(bool)` | Enable transparent background |
 | `SetMaximized(bool)` | Start maximized |
 | `SetBackgroundColor(r, g, b, a)` | Set webview background color |
-| `SetIconFile(string)` | Set window icon from .ico/.png file path |
+| `SetIconFile(string)` | Set window icon from .ico/.png file path. On macOS it is the Dock icon, unless the app bundle has its own (`CFBundleIconFile` / `CFBundleIconName`) |
 | `SetIcon(Stream)` | Set window icon from a .NET stream (e.g. embedded resource) |
 | `Center()` | Center window on the primary monitor |
 | `SetDevToolsEnabled(bool)` | Enable the web inspector (right click › Inspect, F12 on Windows, `OpenDevTools()`; on macOS see [Developer tools](#webview)) |
@@ -1121,7 +1121,7 @@ See [`samples/Rustino.Samples.Blazor`](samples/Rustino.Samples.Blazor) for a com
 
 ### Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (1.80+)
+- [Rust toolchain](https://rustup.rs/) (1.90+)
 - [.NET SDK](https://dotnet.microsoft.com/download) (10.0+)
 - **Windows**: WebView2 runtime (pre-installed on Windows 10/11)
 - **macOS**: Xcode Command Line Tools
@@ -1198,7 +1198,7 @@ UPDATE_ABI_SNAPSHOT=1 cargo test --release abi_layout
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the native library for the six platforms,
 packs the three packages and pushes them to NuGet.org through [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) (a short-lived key obtained with GitHub OIDC; the `NUGET_USER` secret holds the nuget.org profile name). It runs when a GitHub
 release is published (the version is the tag without the leading `v`, e.g. `v0.4.0` → `0.4.0`) and attaches the
-packages to the release; run it manually to publish the `<Version>` of `src/Directory.Build.props`.
+packages to the release; a manual run asks for the version to publish.
 
 ## Cross-Platform Support
 

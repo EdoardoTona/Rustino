@@ -8,6 +8,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. 0.5.6"
+        required: true
+        type: string
 
 jobs:
   build-native:
@@ -131,14 +136,16 @@ jobs:
           dotnet test ../tests/Rustino.NET.Tests/Rustino.NET.Tests.csproj --configuration Release
           dotnet test ../tests/Rustino.Blazor.Tests/Rustino.Blazor.Tests.csproj --configuration Release
 
+      # The tag of the release, or the version given to a manual run, without the leading `v`
       - name: Determine version
         id: version
+        env:
+          REQUESTED: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            TAG="${{ github.event.release.tag_name }}"
-            VERSION="${TAG#v}"
-          else
-            VERSION=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props || echo "0.1.0")
+          VERSION="${REQUESTED#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$REQUESTED' is not a version (expected e.g. 0.5.6 or v0.6.0-preview.1)"
+            exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
