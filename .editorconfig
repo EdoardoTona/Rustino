@@ -1,0 +1,22 @@
+# Editor settings shared by every file of the repository: https://editorconfig.org
+# Line endings are normalized by .gitattributes.
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{csproj,props,targets,slnx,yml,yaml,json}]
+indent_size = 2
+
+[*.md]
+# Two trailing spaces are a line break
+trim_trailing_whitespace = false
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:suggestion
+# Each package has one namespace: its folders group the files, not the types
+dotnet_style_namespace_match_folder = false

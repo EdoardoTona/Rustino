@@ -1,3 +1,11 @@
+//! Menus built from the JSON of the host (RustinoMenu): the menu bar, context menus and the
+//! tray menu.
+
+#[cfg(target_os = "windows")]
+pub(crate) mod accelerators;
+mod bar;
+mod exports;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,6 +17,10 @@ use muda::{
 use serde::Deserialize;
 
 use crate::icon;
+
+#[cfg(target_os = "macos")]
+pub(crate) use bar::DEFAULT_MACOS_MENU;
+pub(crate) use bar::{about_metadata, remove_menu_from_window, set_menu_bar, show_context_menu};
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]

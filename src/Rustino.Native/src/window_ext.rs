@@ -6,6 +6,14 @@
 //! Their commands run in the event loop before `dispatch_command`, in
 //! [`WindowExtRuntime::handle_event`], which also has the event loop target they need on macOS.
 
+mod exports;
+#[cfg(target_os = "linux")]
+pub mod launcher;
+#[cfg(target_os = "macos")]
+mod mac_title_bar;
+#[cfg(target_os = "windows")]
+mod snap_layouts;
+
 use std::ffi::{CString, c_char, c_void};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -18,6 +26,9 @@ use wry::WebViewBuilder;
 use crate::commands::RustinoCommand;
 use crate::state::SharedState;
 use crate::window::{CommandProxy, Wake};
+
+#[cfg(target_os = "macos")]
+use mac_title_bar::MacTitleBar;
 
 /// Messages of the drag region script, which the IPC handler keeps from the host.
 const IPC_PREFIX: &str = "__rustino:";
@@ -258,7 +269,7 @@ pub enum WindowCommand {
     SetSnapButtonRect(Option<[i32; 4]>),
     /// Hover and press on the Snap Layouts window, for the script to show on the button
     #[cfg(target_os = "windows")]
-    SnapButtonState(crate::snap_layouts::SnapButtonState),
+    SnapButtonState(snap_layouts::SnapButtonState),
     /// AppKit may lay out the title bar again after the traffic lights moved, putting them back
     #[cfg(target_os = "macos")]
     CheckTrafficLights,
@@ -453,7 +464,7 @@ pub struct WindowExtRuntime {
     #[cfg(target_os = "windows")]
     proxy: CommandProxy,
     #[cfg(target_os = "windows")]
-    snap_button: Option<crate::snap_layouts::SnapButton>,
+    snap_button: Option<snap_layouts::SnapButton>,
 }
 
 impl WindowExtRuntime {
@@ -681,7 +692,7 @@ impl WindowExtRuntime {
             WindowCommand::SetSnapButtonRect(rect) => {
                 use tao::platform::windows::WindowExtWindows;
                 if self.snap_button.is_none() && rect.is_some() {
-                    self.snap_button = crate::snap_layouts::SnapButton::new(window.hwnd(), self.proxy.clone());
+                    self.snap_button = snap_layouts::SnapButton::new(window.hwnd(), self.proxy.clone());
                 }
                 if let Some(button) = &self.snap_button {
                     button.set_rect(rect);
@@ -801,257 +812,6 @@ impl WindowExtRuntime {
             };
             Some(controls)
         }
-    }
-}
-
-/// The title bar style while the window runs.
-#[cfg(target_os = "macos")]
-struct MacTitleBar {
-    style: MacTitleBarStyle,
-    traffic_lights: Option<(f64, f64)>,
-    /// The decorations are coming back: tao rebuilds the style mask asynchronously, without the
-    /// style, which goes back on the resize that follows
-    pending: bool,
-    /// Where the traffic lights sit before Rustino moves them: they go back there when the
-    /// overlay title bar loses its height
-    default_lights: Option<TrafficLights>,
-    /// Where Rustino put the traffic lights: tao's inset and the left and top margins it gives
-    placed: Option<((f64, f64), (f64, f64))>,
-    proxy: CommandProxy,
-    /// Checks in a row that found the lights moved back
-    checks: u8,
-}
-
-/// The traffic lights in the window, in points from its top left corner.
-#[cfg(target_os = "macos")]
-#[derive(Debug, Clone, Copy)]
-struct TrafficLights {
-    /// Left edge of the close button
-    left: f64,
-    /// Right edge of the zoom button
-    right: f64,
-    top: f64,
-    height: f64,
-}
-
-#[cfg(target_os = "macos")]
-impl MacTitleBar {
-    /// Called before `dispatch_command` runs the event.
-    fn follow(&mut self, event: &Event<RustinoCommand>, window: &Window) {
-        match event {
-            Event::UserEvent(RustinoCommand::SetDecorations(true)) if !window.is_decorated() => {
-                self.pending = true;
-            }
-            Event::WindowEvent {
-                event: WindowEvent::Resized(_),
-                ..
-            } if self.pending => {
-                self.pending = false;
-                self.apply(window);
-            }
-            _ => {}
-        }
-    }
-
-    fn set_style(&mut self, style: MacTitleBarStyle, window: &Window) {
-        self.style = style;
-        // Chromeless windows get the style with their decorations
-        if window.is_decorated() && !self.pending {
-            self.apply(window);
-        }
-    }
-
-    fn apply(&self, window: &Window) {
-        use tao::platform::macos::WindowExtMacOS;
-        let overlay = self.style == MacTitleBarStyle::Overlay;
-        window.set_titlebar_transparent(self.style != MacTitleBarStyle::Default);
-        window.set_fullsize_content_view(overlay);
-        // tao hides the title only in the builder. 0 visible, 1 hidden (NSWindowTitleVisibility)
-        let ns_window = window.ns_window() as *mut objc2::runtime::AnyObject;
-        let visibility: isize = if overlay { 1 } else { 0 };
-        unsafe {
-            let _: () = objc2::msg_send![ns_window, setTitleVisibility: visibility];
-        }
-    }
-
-    /// The traffic lights the page goes under, with the overlay title bar: the page leaves them
-    /// their width and, unless the host sets a height, as high a title bar as their margin above
-    /// gives them.
-    fn controls(&mut self, window: &Window, height: Option<u32>) -> Option<WindowControls> {
-        if self.pending || in_fullscreen(window) {
-            return None;
-        }
-        let overlay = self.style == MacTitleBarStyle::Overlay && window.is_decorated();
-        self.place_lights(window, height.filter(|_| overlay));
-        if !overlay {
-            return None;
-        }
-        let lights = traffic_lights(window)?;
-        let height = height.unwrap_or((2.0 * lights.top + lights.height).round() as u32);
-        Some(WindowControls {
-            platform: "macos",
-            maximized: false,
-            color: None,
-            height: Some(height),
-            left: Vec::new(),
-            right: Vec::new(),
-            native_left: (lights.right + lights.left).round() as u32,
-            scale_factor: window.scale_factor(),
-            labels: None,
-        })
-    }
-
-    /// Moves the traffic lights where the host placed them or, by default, centers them in the
-    /// title bar height set by the host, as far from the left edge as from the top. Without a
-    /// height they go back where they were.
-    fn place_lights(&mut self, window: &Window, height: Option<u32>) {
-        use tao::platform::macos::WindowExtMacOS;
-        // AppKit puts the lights back in their place when the decorations come back, in a layout
-        // pass that runs only after the resize: run it now
-        let ns_window = window.ns_window() as *mut objc2::runtime::AnyObject;
-        unsafe {
-            let content: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_window, contentView];
-            let frame_view: *mut objc2::runtime::AnyObject = objc2::msg_send![content, superview];
-            if !frame_view.is_null() {
-                let _: () = objc2::msg_send![frame_view, layoutSubtreeIfNeeded];
-            }
-        }
-        let Some(lights) = traffic_lights(window) else { return };
-        if self.placed.is_none() && self.traffic_lights.is_none() {
-            self.default_lights = Some(lights);
-        }
-        let at = |(left, top): (f64, f64)| (lights.left - left).abs() < 0.5 && (lights.top - top).abs() < 0.5;
-        if let Some((x, y)) = self.traffic_lights {
-            if self.placed.is_some_and(|(inset, margins)| inset == (x, y) && at(margins)) {
-                self.checks = 0;
-                return;
-            }
-            set_traffic_light_inset_now(window, x, y);
-            self.placed = traffic_lights(window).map(|lights| ((x, y), (lights.left, lights.top)));
-        } else {
-            let target = match (height, self.default_lights) {
-                (Some(height), Some(default)) => {
-                    let margin = ((f64::from(height) - default.height) / 2.0).max(0.0);
-                    (margin, margin)
-                }
-                (None, Some(default)) if self.placed.is_some() => (default.left, default.top),
-                _ => return,
-            };
-            if at(target) {
-                if height.is_none() {
-                    self.placed = None;
-                }
-                self.checks = 0;
-                return;
-            }
-            // tao's y isn't the top margin of the lights: measure and correct
-            let (x, top) = target;
-            let mut y = self.placed.map_or(top, |((_, y), (_, old_top))| y - old_top + top);
-            for _ in 0..2 {
-                y = y.clamp(0.0, MAX_TRAFFIC_LIGHT_INSET);
-                set_traffic_light_inset_now(window, x, y);
-                match traffic_lights(window) {
-                    Some(lights) if (lights.top - top).abs() > 0.25 => y += top - lights.top,
-                    _ => break,
-                }
-            }
-            self.placed = height.map(|_| ((x, y), target));
-        }
-        // AppKit lays out the title bar again after a change of style or decorations, later
-        // and without telling: check once it's done, a few times at most
-        if self.checks < 3 {
-            self.checks += 1;
-            let proxy = self.proxy.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                let _ = proxy.send_event(RustinoCommand::Window(WindowCommand::CheckTrafficLights));
-            });
-        }
-    }
-}
-
-/// Bounds tao's y for the traffic lights, against measures taken while AppKit moves them.
-#[cfg(target_os = "macos")]
-const MAX_TRAFFIC_LIGHT_INSET: f64 = 200.0;
-
-/// Also while the window goes in and out of fullscreen, when tao no longer or not yet reports it.
-#[cfg(target_os = "macos")]
-fn in_fullscreen(window: &Window) -> bool {
-    use tao::platform::macos::WindowExtMacOS;
-    // NSWindowStyleMaskFullScreen
-    const FULL_SCREEN: usize = 1 << 14;
-    let ns_window = window.ns_window() as *mut objc2::runtime::AnyObject;
-    let mask: usize = unsafe { objc2::msg_send![ns_window, styleMask] };
-    window.fullscreen().is_some() || mask & FULL_SCREEN != 0
-}
-
-/// tao stores the inset for its `drawRect:`, which the webview over the whole window keeps from
-/// running, and for leaving fullscreen: the lights move now as tao would move them.
-#[cfg(target_os = "macos")]
-fn set_traffic_light_inset_now(window: &Window, x: f64, y: f64) {
-    use objc2::runtime::AnyObject;
-    use objc2_foundation::{NSPoint, NSRect};
-    use tao::platform::macos::WindowExtMacOS;
-    window.set_traffic_light_inset(tao::dpi::LogicalPosition::new(x, y));
-    let ns_window = window.ns_window() as *mut AnyObject;
-    unsafe {
-        // NSWindowCloseButton, NSWindowMiniaturizeButton and NSWindowZoomButton
-        let buttons: [*mut AnyObject; 3] = [
-            objc2::msg_send![ns_window, standardWindowButton: 0usize],
-            objc2::msg_send![ns_window, standardWindowButton: 1usize],
-            objc2::msg_send![ns_window, standardWindowButton: 2usize],
-        ];
-        if buttons.iter().any(|button| button.is_null()) {
-            return;
-        }
-        let close: NSRect = objc2::msg_send![buttons[0], frame];
-        let miniaturize: NSRect = objc2::msg_send![buttons[1], frame];
-        let titlebar: *mut AnyObject = objc2::msg_send![buttons[0], superview];
-        let container: *mut AnyObject = objc2::msg_send![titlebar, superview];
-        if container.is_null() {
-            return;
-        }
-        let window_frame: NSRect = objc2::msg_send![ns_window, frame];
-        let mut container_frame: NSRect = objc2::msg_send![container, frame];
-        container_frame.size.height = close.size.height + y;
-        container_frame.origin.y = window_frame.size.height - container_frame.size.height;
-        let _: () = objc2::msg_send![container, setFrame: container_frame];
-        let spacing = miniaturize.origin.x - close.origin.x;
-        for (i, &button) in buttons.iter().enumerate() {
-            let frame: NSRect = objc2::msg_send![button, frame];
-            let origin = NSPoint::new(x + i as f64 * spacing, frame.origin.y);
-            let _: () = objc2::msg_send![button, setFrameOrigin: origin];
-        }
-    }
-}
-
-/// `None` when the window has no traffic lights (chromeless).
-#[cfg(target_os = "macos")]
-fn traffic_lights(window: &Window) -> Option<TrafficLights> {
-    use objc2::runtime::AnyObject;
-    use objc2_foundation::NSRect;
-    use tao::platform::macos::WindowExtMacOS;
-    let ns_window = window.ns_window() as *mut AnyObject;
-    unsafe {
-        // NSWindowCloseButton and NSWindowZoomButton
-        let close: *mut AnyObject = objc2::msg_send![ns_window, standardWindowButton: 0usize];
-        let zoom: *mut AnyObject = objc2::msg_send![ns_window, standardWindowButton: 2usize];
-        if close.is_null() || zoom.is_null() {
-            return None;
-        }
-        // In window coordinates, from the bottom left corner
-        let frame = |button: *mut AnyObject| -> NSRect {
-            let bounds: NSRect = objc2::msg_send![button, bounds];
-            objc2::msg_send![button, convertRect: bounds, toView: std::ptr::null_mut::<AnyObject>()]
-        };
-        let (close, zoom) = (frame(close), frame(zoom));
-        let window_frame: NSRect = objc2::msg_send![ns_window, frame];
-        Some(TrafficLights {
-            left: close.origin.x,
-            right: zoom.origin.x + zoom.size.width,
-            top: window_frame.size.height - close.origin.y - close.size.height,
-            height: close.size.height,
-        })
     }
 }
 
@@ -1298,77 +1058,6 @@ impl Drop for GtkThemeWatch {
         for handler in self.handlers.drain(..) {
             self.settings.disconnect(handler);
         }
-    }
-}
-
-/// Badge and progress on the dock icon through the Unity LauncherEntry D-Bus signals, which
-/// Ubuntu Dock, Dash to Dock and KDE Plasma follow. tao sends them through libunity only while
-/// Unity itself runs.
-#[cfg(target_os = "linux")]
-pub mod launcher {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-
-    use gtk::gio;
-    use gtk::glib::{ToVariant, Variant};
-    use tao::window::ProgressState;
-
-    /// The dock entry is the app's, shared by its windows
-    static DESKTOP_FILE_NAME: Mutex<Option<String>> = Mutex::new(None);
-
-    pub fn set_desktop_file_name(name: Option<String>) {
-        if let Ok(mut current) = DESKTOP_FILE_NAME.lock() {
-            *current = name;
-        }
-    }
-
-    pub fn set_count(count: Option<u32>) {
-        let count = count.unwrap_or(0);
-        update(&[
-            ("count", i64::from(count).to_variant()),
-            ("count-visible", (count > 0).to_variant()),
-        ]);
-    }
-
-    pub fn set_progress(state: ProgressState, progress: Option<u64>) {
-        let visible = !matches!(state, ProgressState::None);
-        let mut properties = vec![("progress-visible", visible.to_variant())];
-        if let Some(progress) = progress {
-            properties.push(("progress", (progress.min(100) as f64 / 100.0).to_variant()));
-        }
-        update(&properties);
-    }
-
-    fn update(properties: &[(&str, Variant)]) {
-        let Ok(connection) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
-            return;
-        };
-        let app_uri = app_uri();
-        let properties: HashMap<String, Variant> =
-            properties.iter().map(|(key, value)| (key.to_string(), value.clone())).collect();
-        let path = format!("/com/canonical/unity/launcherentry/{}", path_id(&app_uri));
-        let _ = connection.emit_signal(
-            None,
-            &path,
-            "com.canonical.Unity.LauncherEntry",
-            "Update",
-            Some(&(app_uri, properties).to_variant()),
-        );
-    }
-
-    /// `application://<desktop file>`, by default `<executable name>.desktop`
-    pub(super) fn app_uri() -> String {
-        let name = DESKTOP_FILE_NAME.lock().ok().and_then(|name| name.clone()).unwrap_or_else(|| {
-            let exe = std::env::current_exe().ok();
-            let stem = exe.as_deref().and_then(|p| p.file_stem()).and_then(|s| s.to_str());
-            format!("{}.desktop", stem.unwrap_or("rustino"))
-        });
-        format!("application://{name}")
-    }
-
-    /// Any object path works: the docks read the app from the signal
-    pub(super) fn path_id(app_uri: &str) -> u32 {
-        app_uri.bytes().fold(5381u32, |hash, b| hash.wrapping_mul(33).wrapping_add(u32::from(b)))
     }
 }
 

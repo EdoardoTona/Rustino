@@ -1,6 +1,6 @@
 //! Layout of the `#[repr(C)]` structs shared with .NET, pinned in `abi-layout.json`.
 //!
-//! The compiler computes offsets and sizes here and the .NET tests (src/Rustino.NET.Tests)
+//! The compiler computes offsets and sizes here and the .NET tests (tests/Rustino.NET.Tests)
 //! compare `Marshal.OffsetOf`/`Marshal.SizeOf` of the matching .NET structs with the same
 //! snapshot, so both sides are checked against one truth. After an intentional change:
 //!

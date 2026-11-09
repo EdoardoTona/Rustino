@@ -1,19 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <PackageId>EdoardoTona.Rustino</PackageId>
     <Description>Cross-platform native webview windows powered by Rust (wry/tao). Drop-in replacement for Photino.NET.</Description>
-    <Authors>Edoardo Tona</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/EdoardoTona/Rustino</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/EdoardoTona/Rustino</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <IsPackable>true</IsPackable>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <!--
@@ -67,7 +57,7 @@
 
   <!-- Dependencies -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
 </Project>

@@ -1,23 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <PackageId>EdoardoTona.Rustino.Blazor</PackageId>
     <Description>Blazor Hybrid for Rustino.NET: host Razor components in a native Rustino window. Drop-in replacement for Photino.Blazor.</Description>
-    <Authors>Edoardo Tona</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/EdoardoTona/Rustino</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/EdoardoTona/Rustino</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <IsPackable>true</IsPackable>
-    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../Rustino.NET/Rustino.NET.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebView" Version="10.0.14" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView" />
   </ItemGroup>
 
   <ItemGroup>

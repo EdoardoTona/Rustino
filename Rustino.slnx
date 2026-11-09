@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Rustino.Samples.Blazor/Rustino.Samples.Blazor.csproj" />
+    <Project Path="samples/Rustino.Samples/Rustino.Samples.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Rustino.Blazor/Rustino.Blazor.csproj" />
+    <Project Path="src/Rustino.NET.Reactive/Rustino.NET.Reactive.csproj" />
+    <Project Path="src/Rustino.NET/Rustino.NET.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Rustino.Blazor.Tests/Rustino.Blazor.Tests.csproj" />
+    <Project Path="tests/Rustino.NET.Tests/Rustino.NET.Tests.csproj" />
+  </Folder>
+</Solution>

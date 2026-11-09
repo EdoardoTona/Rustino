@@ -15,6 +15,12 @@ crate-type = ["cdylib"]
 # with devtools enabled can be inspected from Safari's Develop menu.
 devtools = ["wry/devtools"]
 
+[lints.clippy]
+missing_safety_doc = "allow"
+too_many_arguments = "allow"
+collapsible_if = "allow"
+unnecessary_map_or = "allow"
+
 [dependencies]
 tao = "0.37"
 wry = "0.57"

@@ -6,6 +6,25 @@ use std::rc::{Rc, Weak};
 
 use tao::window::{Window, WindowBuilder};
 
+use crate::window::RustinoWindow;
+
+// C API: pre-run only, 1 when applied
+
+/// The parent must run when the window starts; null removes it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_parent(instance: *mut RustinoWindow, parent: *mut RustinoWindow) -> i32 {
+    if std::ptr::eq(instance, parent) {
+        return 0;
+    }
+    let parent = unsafe { parent.as_ref() }.map(|p| p.key());
+    unsafe { crate::window::configure(instance, |s| s.config.parent = parent) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_modal(instance: *mut RustinoWindow, modal: i32) -> i32 {
+    unsafe { crate::window::configure(instance, |s| s.config.modal = modal != 0) }
+}
+
 #[cfg(target_os = "windows")]
 thread_local! {
     /// The open modal windows of each parent: the parent is enabled again when the last one closes

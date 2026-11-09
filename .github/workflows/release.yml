@@ -128,8 +128,8 @@ jobs:
         env:
           RUSTINO_NATIVE_LIB: ${{ github.workspace }}/src/Rustino.NET/runtimes/linux-x64/native/librustino_native.so
         run: |
-          dotnet test Rustino.NET.Tests/Rustino.NET.Tests.csproj --configuration Release
-          dotnet test Rustino.Blazor.Tests/Rustino.Blazor.Tests.csproj --configuration Release
+          dotnet test ../tests/Rustino.NET.Tests/Rustino.NET.Tests.csproj --configuration Release
+          dotnet test ../tests/Rustino.Blazor.Tests/Rustino.Blazor.Tests.csproj --configuration Release
 
       - name: Determine version
         id: version

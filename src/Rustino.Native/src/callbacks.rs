@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
-use crate::window::SchemeResponse;
+use crate::custom_scheme::SchemeResponse;
 
 #[derive(Clone, Copy)]
 pub struct RustinoCallbacks {
@@ -74,6 +74,7 @@ mod tests {
     fn is_copy_and_clone() {
         let cb = RustinoCallbacks::default();
         let cb2 = cb;
+        #[allow(clippy::clone_on_copy)]
         let _cb3 = cb2.clone();
         assert!(cb.context.is_null());
     }

@@ -2,9 +2,100 @@
 //! transient for it on Linux. While the window runs they run on its event loop thread, where
 //! the parent window lives; before (or after) that they have no parent.
 
+use std::os::raw::c_char;
+use std::panic::catch_unwind;
+
 use tao::window::Window;
 
+use crate::util;
 use crate::window::RustinoWindow;
+
+// ---------------------------------------------------------------------------
+// C API
+// ---------------------------------------------------------------------------
+
+unsafe fn file_dialog_paths(
+    instance: *mut RustinoWindow,
+    kind: FileDialogKind,
+    title: *const c_char,
+    default_path: *const c_char,
+    filters: *const c_char,
+) -> *mut c_char {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let params = DialogParams {
+            title: unsafe { util::cstr_to_string(title) },
+            default_path: unsafe { util::cstr_to_string(default_path) },
+            filters: parse_filters(unsafe { util::cstr_to_string(filters) }),
+        };
+        let paths = file_dialog(unsafe { instance.as_ref() }, kind, params)?;
+        std::ffi::CString::new(paths.join("\n")).ok().map(|s| s.into_raw())
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// Paths separated by '\n', null when canceled.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_show_open_file_dialog(
+    instance: *mut RustinoWindow,
+    title: *const c_char,
+    default_path: *const c_char,
+    filters: *const c_char,
+    multi_select: i32,
+) -> *mut c_char {
+    let kind = FileDialogKind::Open { multiple: multi_select != 0 };
+    unsafe { file_dialog_paths(instance, kind, title, default_path, filters) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_show_save_file_dialog(
+    instance: *mut RustinoWindow,
+    title: *const c_char,
+    default_path: *const c_char,
+    filters: *const c_char,
+) -> *mut c_char {
+    unsafe { file_dialog_paths(instance, FileDialogKind::Save, title, default_path, filters) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_show_select_folder_dialog(
+    instance: *mut RustinoWindow,
+    title: *const c_char,
+    default_path: *const c_char,
+    multi_select: i32,
+) -> *mut c_char {
+    let kind = FileDialogKind::Folder { multiple: multi_select != 0 };
+    unsafe { file_dialog_paths(instance, kind, title, default_path, std::ptr::null()) }
+}
+
+/// `buttons`: 0 Ok, 1 OkCancel, 2 YesNo, 3 YesNoCancel, 4 RetryCancel, 5 AbortRetryIgnore.
+/// `icon`: 0 info, 1 warning, 2 error, 3 question. Returns -1 cancel, 0 ok, 1 yes, 2 no, 3 abort,
+/// 4 retry, 5 ignore. `instance` can be null: the dialog then has no parent.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_show_message(
+    instance: *mut RustinoWindow,
+    title: *const c_char,
+    text: *const c_char,
+    buttons: i32,
+    icon: i32,
+) -> i32 {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = message(
+            unsafe { instance.as_ref() },
+            unsafe { util::cstr_to_string(title) }.unwrap_or_default(),
+            unsafe { util::cstr_to_string(text) }.unwrap_or_default(),
+            MessageButtons::from_i32(buttons),
+            MessageIcon::from_i32(icon),
+        );
+        result as i32
+    }))
+    .unwrap_or(MessageResult::Cancel as i32)
+}
+
+// ---------------------------------------------------------------------------
+// Dialogs
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub struct DialogParams {

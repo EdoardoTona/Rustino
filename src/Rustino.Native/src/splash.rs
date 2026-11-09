@@ -1,5 +1,57 @@
+//! The splashscreen: an image shown while the app starts, before any window. It needs no
+//! event loop.
+
+use std::os::raw::c_char;
+use std::panic::catch_unwind;
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use crate::util;
+
+/// # Safety
+/// `image_path` must be a valid null-terminated C string pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_splash_create(
+    image_path: *const c_char,
+    width: i32,
+    height: i32,
+) -> *mut SplashWindow {
+    catch_unwind(|| {
+        let path = unsafe { util::cstr_to_string(image_path) }?;
+        let w = width.max(1) as u32;
+        let h = height.max(1) as u32;
+        let splash = SplashWindow::new(&path, w, h).ok()?;
+        Some(Box::into_raw(Box::new(splash)))
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// # Safety
+/// `splash` must be a valid pointer returned from `rustino_splash_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_splash_close(splash: *mut SplashWindow) {
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(s) = unsafe { splash.as_ref() } {
+            s.close();
+        }
+    }));
+}
+
+/// # Safety
+/// `splash` must be a valid pointer returned from `rustino_splash_create`, or null.
+/// After calling this, the pointer is invalid and must not be used again.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_splash_dtor(splash: *mut SplashWindow) {
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !splash.is_null() {
+            unsafe {
+                drop(Box::from_raw(splash));
+            }
+        }
+    }));
+}
 
 /// Larger than any screen: the image would take gigabytes
 pub const MAX_SIZE: u32 = 16384;

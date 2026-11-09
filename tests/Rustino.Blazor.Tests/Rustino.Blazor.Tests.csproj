@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Rustino.Blazor/Rustino.Blazor.csproj" />
+  </ItemGroup>
+
+</Project>

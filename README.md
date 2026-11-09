@@ -1115,7 +1115,7 @@ public class EditorService(RustinoWindowAccessor accessor)
 
  It closes when the user closes it, with `Close()` on the returned `RustinoWindow`, or when the main window closes. When the window can't open (e.g. its webview fails), `RustinoBlazorApp.WindowFailed` is raised with the window and the exception, and the window is disposed. Call it while `Run()` runs; see [Multiple Windows](#multiple-windows) for how the windows share the event loop.
 
-See [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor) for a complete example.
+See [`samples/Rustino.Samples.Blazor`](samples/Rustino.Samples.Blazor) for a complete example.
 
 ## Building from Source
 
@@ -1136,27 +1136,39 @@ cargo build --release
 # ...or, on macOS, with the web inspector inside the app (private WebKit API, see Developer tools)
 cargo build --release --features devtools
 
-# Build the .NET wrapper
-cd ../Rustino.NET
+cd ../..
+
+# Build the .NET projects of Rustino.slnx: packages, tests and samples
 dotnet build
 
 # Run a sample
-cd ../Rustino.Samples
-dotnet run
+dotnet run --project samples/Rustino.Samples
 
 # Run the Blazor sample
-cd ../Rustino.Samples.Blazor
-dotnet run
+dotnet run --project samples/Rustino.Samples.Blazor
 ```
+
+### Repository layout
+
+| Path | Content |
+|---|---|
+| `src/Rustino.Native` | The native library (Rust). Each feature is a module that keeps its C API (`rustino_*`) next to its implementation; `window` holds the window and the event loop |
+| `src/Rustino.NET` | The .NET wrapper: `Interop/` (the P/Invoke declarations of the C API), `Window/` (`RustinoWindow`, one partial file per area, and its types), `SingleInstance/` |
+| `src/Rustino.NET.Reactive`, `src/Rustino.Blazor` | The packages built on Rustino.NET |
+| `tests/` | The .NET tests, with the interop contract tests |
+| `samples/` | The sample apps |
+
+`Directory.Build.props` holds the settings shared by the .NET projects (`src/Directory.Build.props` adds the
+version and the metadata of the packages) and `Directory.Packages.props` the version of every NuGet dependency.
 
 ### Samples
 
-- [`src/Rustino.Samples`](src/Rustino.Samples): a tabbed showcase of the window API — window state and chrome, JS
+- [`samples/Rustino.Samples`](samples/Rustino.Samples): a tabbed showcase of the window API — window state and chrome, JS
   interop, dialogs and message boxes, menus and tray, notifications, badges, monitors, reactive streams, native
   window features, webview (downloads, file drop, cookies, printing, devtools) and, in the **Launch** tab,
   single instance, deep links, `Activate()` and `OpenExternal()`. Run it a second time, e.g.
   `dotnet run -- rustino-sample://open?id=42`, to see the launch forwarded to the first process.
-- [`src/Rustino.Samples.Blazor`](src/Rustino.Samples.Blazor): Blazor Hybrid with the `app://` custom scheme,
+- [`samples/Rustino.Samples.Blazor`](samples/Rustino.Samples.Blazor): Blazor Hybrid with the `app://` custom scheme,
   dependency injection, `HttpClient` and other windows that share a singleton service with the main one.
 
 ### Interop contract tests
@@ -1166,11 +1178,11 @@ gating. They also compare the `#[repr(C)]` layouts with the Rust-generated snaps
 exists in the built native library for the current platform:
 
 ```bash
-dotnet test src/Rustino.NET.Tests/Rustino.NET.Tests.csproj -c Release
+dotnet test tests/Rustino.NET.Tests -c Release
 ```
 
 On Windows, `MultiWindowTests` (and the Rust test `windows_started_while_the_app_runs_join_its_event_loop`) open
-hidden windows, so they need a desktop session and the WebView2 Runtime. `src/Rustino.Blazor.Tests` covers the
+hidden windows, so they need a desktop session and the WebView2 Runtime. `tests/Rustino.Blazor.Tests` covers the
 services of the Blazor windows.
 
 Build `src/Rustino.Native` with `cargo build --release` first to enable the binary export check. The Rust ABI

@@ -1,5 +1,17 @@
 <Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- The NuGet packages: one version (bumped by the release) and the same metadata for all. -->
   <PropertyGroup>
     <Version>0.3.9</Version>
+    <Authors>Edoardo Tona</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/EdoardoTona/Rustino</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/EdoardoTona/Rustino</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+
 </Project>

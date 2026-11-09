@@ -6,12 +6,142 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::c_void;
+use std::os::raw::c_char;
+use std::panic::catch_unwind;
 use std::sync::Once;
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use crate::commands::RustinoCommand;
+use crate::util;
+use crate::window::{RustinoWindow, configure};
+
+// ---------------------------------------------------------------------------
+// C API
+// ---------------------------------------------------------------------------
+
+/// Registers a global shortcut for the window. 1 when registered; before the window runs, 1 when
+/// the accelerator is valid: the window registers it when it starts (failures go to the log). 0
+/// when it's invalid, another window or app has it, or the window closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_register_global_shortcut(
+    instance: *mut RustinoWindow,
+    accelerator: *const c_char,
+) -> i32 {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (Some(inst), Some(accelerator)) = (unsafe { instance.as_ref() }, unsafe { util::cstr_to_string(accelerator) }) else {
+            return 0;
+        };
+        let Ok(hotkey) = parse(&accelerator) else {
+            return 0;
+        };
+        let added = inst.configure(|s| {
+            let shortcuts = &mut s.config.global_shortcuts;
+            if !shortcuts.iter().any(|a| parse(a).is_ok_and(|h| h.id() == hotkey.id())) {
+                shortcuts.push(accelerator.clone());
+            }
+        });
+        if added {
+            return 1;
+        }
+        let key = inst.key();
+        let register_now = {
+            let accelerator = accelerator.clone();
+            move |_: &tao::window::Window, _: &wry::WebView| register(key, &accelerator)
+        };
+        match inst.invoke(register_now) {
+            Some(result) => i32::from(result.is_ok()),
+            // Starting: registered once it runs
+            None if !inst.is_running() => i32::from(inst.post(move |_, _| {
+                let _ = register(key, &accelerator);
+            })),
+            None => 0,
+        }
+    }))
+    .unwrap_or(0)
+}
+
+/// 1 when the window had registered the shortcut (before it runs: when it was to register it).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_unregister_global_shortcut(
+    instance: *mut RustinoWindow,
+    accelerator: *const c_char,
+) -> i32 {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (Some(inst), Some(accelerator)) = (unsafe { instance.as_ref() }, unsafe { util::cstr_to_string(accelerator) }) else {
+            return 0;
+        };
+        let Ok(hotkey) = parse(&accelerator) else {
+            return 0;
+        };
+        let mut removed = false;
+        if inst.configure(|s| {
+            let shortcuts = &mut s.config.global_shortcuts;
+            let before = shortcuts.len();
+            shortcuts.retain(|a| parse(a).map_or(true, |h| h.id() != hotkey.id()));
+            removed = shortcuts.len() != before;
+        }) {
+            return i32::from(removed);
+        }
+        let key = inst.key();
+        let unregister_now = {
+            let accelerator = accelerator.clone();
+            move |_: &tao::window::Window, _: &wry::WebView| unregister(key, &accelerator)
+        };
+        match inst.invoke(unregister_now) {
+            Some(unregistered) => i32::from(unregistered),
+            None if !inst.is_running() => i32::from(inst.post(move |_, _| {
+                unregister(key, &accelerator);
+            })),
+            None => 0,
+        }
+    }))
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_unregister_all_global_shortcuts(instance: *mut RustinoWindow) {
+    let _ = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(inst) = unsafe { instance.as_ref() } {
+            if inst.configure(|s| s.config.global_shortcuts.clear()) {
+                return;
+            }
+            let key = inst.key();
+            inst.post(move |_, _| unregister_all(key));
+        }
+    }));
+}
+
+/// 1 when the running window registered the shortcut.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_is_global_shortcut_registered(
+    instance: *mut RustinoWindow,
+    accelerator: *const c_char,
+) -> i32 {
+    catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (Some(inst), Some(accelerator)) = (unsafe { instance.as_ref() }, unsafe { util::cstr_to_string(accelerator) }) else {
+            return 0;
+        };
+        let key = inst.key();
+        let registered = inst.invoke(move |_, _| is_registered(key, &accelerator));
+        i32::from(registered == Some(true))
+    }))
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_global_shortcut_handler(
+    instance: *mut RustinoWindow,
+    handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+) {
+    unsafe { configure(instance, |s| s.callbacks.on_global_shortcut = handler) };
+}
+
+// ---------------------------------------------------------------------------
+// Shortcuts of the windows, on the event loop thread
+// ---------------------------------------------------------------------------
 
 struct Registered {
     window: usize,

@@ -1,5 +1,3 @@
-use std::sync::mpsc;
-
 use crate::config::AboutField;
 use crate::menu::MenuItemUpdate;
 
@@ -52,9 +50,6 @@ pub enum RustinoCommand {
         fg_b: u8,
     },
 
-    GetMonitors(mpsc::Sender<String>),
-    GetCurrentMonitor(mpsc::Sender<String>),
-
     MenuEventFired(muda::MenuId),
     /// The id of a global shortcut, which only the window that registered it handles
     GlobalShortcutPressed(u32),
@@ -75,6 +70,8 @@ pub struct TrayParams {
     pub tooltip: Option<String>,
     pub menu_json: Option<String>,
     pub title: Option<String>,
+    /// macOS only
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub icon_is_template: bool,
     pub menu_on_left_click: bool,
 }

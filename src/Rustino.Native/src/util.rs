@@ -28,6 +28,15 @@ pub fn free_cstring(ptr: *mut c_char) {
     }
 }
 
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown error".into());
+    format!("The native window failed: {detail}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,5 +94,15 @@ mod tests {
         let s = CString::new("test").unwrap();
         let ptr = s.into_raw();
         free_cstring(ptr);
+    }
+
+    #[test]
+    fn panic_messages() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_message(payload.as_ref()), "The native window failed: boom");
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("bang"));
+        assert_eq!(panic_message(payload.as_ref()), "The native window failed: bang");
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42);
+        assert_eq!(panic_message(payload.as_ref()), "The native window failed: unknown error");
     }
 }
