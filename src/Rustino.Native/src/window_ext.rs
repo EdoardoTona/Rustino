@@ -391,15 +391,11 @@ impl WindowExt {
             // macOS places the traffic lights on the first update, also without drag regions
             chrome_dirty: cfg!(target_os = "macos"),
             #[cfg(target_os = "macos")]
-            mac_title_bar: MacTitleBar {
-                style: self.options.mac_title_bar_style,
-                traffic_lights: self.options.traffic_light_position,
-                pending: false,
-                default_lights: None,
-                placed: None,
+            mac_title_bar: MacTitleBar::new(
+                self.options.mac_title_bar_style,
+                self.options.traffic_light_position,
                 proxy,
-                checks: 0,
-            },
+            ),
             #[cfg(target_os = "linux")]
             _theme_watch: GtkThemeWatch::new(proxy),
             #[cfg(target_os = "windows")]
