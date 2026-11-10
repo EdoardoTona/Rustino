@@ -240,17 +240,22 @@ public partial class RustinoWindow
     /// </summary>
     /// <remarks>
     /// <para>Windows: fullscreen and always on top, without the system shortcuts (Windows key, Alt+Tab, Alt+Esc,
-    /// Ctrl+Esc, Ctrl+Shift+Esc, Alt+F4, Alt+Space) nor the edge swipes of touch screens. Ctrl+Alt+Del and Win+L
-    /// stay: no app can block them.</para>
+    /// Ctrl+Esc, Ctrl+Shift+Esc, Alt+F4, Alt+Space), PrintScreen, Search/Home, application launch keys, Sleep,
+    /// F12, Ctrl+Shift+I and Alt+Shift+NumLock, nor the edge swipes of touch screens. Ctrl+Alt+Del and Win+L stay:
+    /// no app can block them.</para>
+    /// <para>Windows also temporarily disables the activation shortcuts for Sticky Keys, Filter Keys, Mouse Keys
+    /// and High Contrast. Enabled features keep working. The shortcut flags are restored after the app's last
+    /// kiosk window exits; after a forced process exit, a later kiosk session recovers them. Signing out also
+    /// restores the user's stored accessibility preferences.</para>
     /// <para>macOS: no Dock, menu bar, Cmd+Tab, Mission Control, Force Quit, Cmd+H, Cmd+Q, logout, restart or
     /// shutdown.</para>
     /// <para>Linux: fullscreen and above the other windows, with the keyboard grabbed: the shortcuts of the
     /// desktop don't work on X11, and Wayland compositors are asked to inhibit them (GNOME asks the user first).
     /// </para>
     /// <para>While it's on, <see cref="WindowClosing"/> isn't raised, <see cref="SetFullscreen"/> and
-    /// <see cref="SetTopMost"/> apply once it's off, and the window goes back to the state it had. Nothing is
-    /// changed in the system, unless <paramref name="disableTouchpadGestures"/> is set: an app that ends leaves
-    /// it as it was.</para>
+    /// <see cref="SetTopMost"/> apply once it's off, and the window goes back to the state it had. Window and
+    /// keyboard locks end with the process. See <paramref name="disableTouchpadGestures"/> for the optional
+    /// change to the user's touchpad preferences.</para>
     /// </remarks>
     /// <param name="disableTouchpadGestures">
     /// Windows: also turns off the gestures of precision touchpads with three and four fingers (show the desktop,

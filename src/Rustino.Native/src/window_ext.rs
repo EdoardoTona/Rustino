@@ -8,6 +8,8 @@
 
 mod exports;
 mod kiosk;
+#[cfg(target_os = "windows")]
+mod kiosk_accessibility;
 #[cfg(target_os = "linux")]
 pub mod launcher;
 #[cfg(target_os = "macos")]

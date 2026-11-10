@@ -4,7 +4,8 @@
 //!
 //! - Windows: borderless fullscreen and always on top; a low-level keyboard hook swallows the
 //!   shortcuts of the system (Windows key, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc, Alt+F4,
-//!   Alt+Space); the edge swipes of touch screens are off. The touchpad gestures with three
+//!   Alt+Space), PrintScreen, Search/Home, application launch keys, Sleep, F12 and Ctrl+Shift+I.
+//!   Accessibility activation shortcuts and edge swipes of touch screens are off. Touchpad gestures with three
 //!   and four fingers aren't keys and stay (`TouchpadGesturesController`, tried on build 26300,
 //!   turns on for a desktop app but gets none of them): the window comes back after them,
 //!   unless the host asks to turn them off in the settings of the user meanwhile. Ctrl+Alt+Del and Win+L can't be blocked
@@ -15,8 +16,9 @@
 //! - Linux: fullscreen and above the others, with the keyboard grabbed: on X11 the window manager
 //!   doesn't see its shortcuts, on Wayland the compositor is asked to inhibit them.
 //!
-//! Nothing outlives the process: no policies or settings of the system are changed, so an app
-//! that crashes leaves the system as it was.
+//! Window and keyboard locks end with the process. Windows accessibility shortcut settings
+//! are restored after the last kiosk window exits; a later kiosk recovers the saved settings
+//! after a crash. Turning off touchpad gestures is a separate, explicit change to user settings.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -185,19 +187,34 @@ impl Checks {
 
 /// Whether the kiosk swallows a key (Windows virtual key code): the Windows keys with all their
 /// shortcuts, Alt+Tab, Alt+F4, Alt+Space (the window menu), Alt+Esc, Ctrl+Esc (Start) and
-/// Ctrl+Shift+Esc (Task Manager).
+/// Ctrl+Shift+Esc (Task Manager), system/application launch keys, PrintScreen, Sleep, developer
+/// tools shortcuts and Alt+Shift+NumLock. Shift activation sequences use accessibility APIs.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn is_system_shortcut(key: u32, alt: bool, ctrl: bool) -> bool {
+fn is_system_shortcut(key: u32, alt: bool, ctrl: bool, shift: bool) -> bool {
     const TAB: u32 = 0x09;
     const ESCAPE: u32 = 0x1B;
     const SPACE: u32 = 0x20;
+    const PRINT_SCREEN: u32 = 0x2C;
+    const I: u32 = 0x49;
     const LEFT_WIN: u32 = 0x5B;
     const RIGHT_WIN: u32 = 0x5C;
+    const SLEEP: u32 = 0x5F;
     const F4: u32 = 0x73;
+    const F12: u32 = 0x7B;
+    const NUM_LOCK: u32 = 0x90;
+    const BROWSER_SEARCH: u32 = 0xAA;
+    const BROWSER_HOME: u32 = 0xAC;
+    const LAUNCH_MAIL: u32 = 0xB4;
+    const LAUNCH_MEDIA: u32 = 0xB5;
+    const LAUNCH_APP1: u32 = 0xB6;
+    const LAUNCH_APP2: u32 = 0xB7;
     match key {
-        LEFT_WIN | RIGHT_WIN => true,
+        LEFT_WIN | RIGHT_WIN | PRINT_SCREEN | SLEEP | F12 | BROWSER_SEARCH | BROWSER_HOME
+        | LAUNCH_MAIL | LAUNCH_MEDIA | LAUNCH_APP1 | LAUNCH_APP2 => true,
         TAB | F4 | SPACE => alt,
         ESCAPE => alt || ctrl,
+        NUM_LOCK => alt && shift,
+        I => ctrl && shift && !alt,
         _ => false,
     }
 }
@@ -217,7 +234,7 @@ mod platform {
     use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
-        VK_CONTROL, VK_ESCAPE,
+        VK_CONTROL, VK_ESCAPE, VK_SHIFT,
     };
     use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -234,6 +251,7 @@ mod platform {
 
     pub struct Lock {
         _keys: KeyHook,
+        _accessibility: crate::window_ext::kiosk_accessibility::Lock,
         /// Tells when another app takes the foreground
         foreground_events: HWINEVENTHOOK,
         /// The touchpad gestures of the user are off for this window
@@ -263,6 +281,7 @@ mod platform {
             };
             Self {
                 _keys: KeyHook::new(),
+                _accessibility: crate::window_ext::kiosk_accessibility::Lock::new(),
                 foreground_events,
                 without_touchpad_gestures,
             }
@@ -648,7 +667,8 @@ mod platform {
             let key = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
             let alt = key.flags.0 & LLKHF_ALTDOWN.0 != 0;
             let ctrl = unsafe { GetAsyncKeyState(i32::from(VK_CONTROL.0)) } < 0;
-            if super::is_system_shortcut(key.vkCode, alt, ctrl) {
+            let shift = unsafe { GetAsyncKeyState(i32::from(VK_SHIFT.0)) } < 0;
+            if super::is_system_shortcut(key.vkCode, alt, ctrl, shift) {
                 return LRESULT(1);
             }
         }
@@ -869,23 +889,39 @@ mod tests {
         const ESCAPE: u32 = 0x1B;
         const F4: u32 = 0x73;
         // The Windows keys, alone and with any other key
-        assert!(is_system_shortcut(0x5B, false, false));
-        assert!(is_system_shortcut(0x5C, false, false));
-        assert!(is_system_shortcut(TAB, true, false), "Alt+Tab");
-        assert!(is_system_shortcut(TAB, true, true), "Ctrl+Alt+Tab");
-        assert!(is_system_shortcut(F4, true, false), "Alt+F4");
-        assert!(is_system_shortcut(0x20, true, false), "Alt+Space");
-        assert!(is_system_shortcut(ESCAPE, true, false), "Alt+Esc");
-        assert!(is_system_shortcut(ESCAPE, false, true), "Ctrl+Esc, Ctrl+Shift+Esc");
+        assert!(is_system_shortcut(0x5B, false, false, false));
+        assert!(is_system_shortcut(0x5C, false, false, false));
+        assert!(is_system_shortcut(0xAA, false, false, false), "Dedicated Search key (Fn+F9 on Dell XPS)");
+        assert!(is_system_shortcut(TAB, true, false, false), "Alt+Tab");
+        assert!(is_system_shortcut(TAB, true, true, false), "Ctrl+Alt+Tab");
+        assert!(is_system_shortcut(F4, true, false, false), "Alt+F4");
+        assert!(is_system_shortcut(0x20, true, false, false), "Alt+Space");
+        assert!(is_system_shortcut(ESCAPE, true, false, false), "Alt+Esc");
+        assert!(is_system_shortcut(ESCAPE, false, true, false), "Ctrl+Esc, Ctrl+Shift+Esc");
+        for key in [0x2C, 0xAC, 0xB4, 0xB5, 0xB6, 0xB7, 0x5F, 0x7B] {
+            assert!(is_system_shortcut(key, false, false, false), "System key {key:#X}");
+        }
+        assert!(is_system_shortcut(0x2C, true, false, true), "Alt+Shift+PrintScreen");
+        assert!(is_system_shortcut(0x90, true, false, true), "Alt+Shift+NumLock");
+        assert!(is_system_shortcut(0x49, false, true, true), "Ctrl+Shift+I");
     }
 
     #[test]
     fn keys_of_the_page() {
-        assert!(!is_system_shortcut(0x09, false, false), "Tab");
-        assert!(!is_system_shortcut(0x09, false, true), "Ctrl+Tab");
-        assert!(!is_system_shortcut(0x1B, false, false), "Esc");
-        assert!(!is_system_shortcut(0x73, false, false), "F4");
-        assert!(!is_system_shortcut(0x20, false, false), "Space");
-        assert!(!is_system_shortcut(0x41, true, true), "Ctrl+Alt+A: a secret combination of the host");
+        assert!(!is_system_shortcut(0x09, false, false, false), "Tab");
+        assert!(!is_system_shortcut(0x09, false, true, false), "Ctrl+Tab");
+        assert!(!is_system_shortcut(0x1B, false, false, false), "Esc");
+        assert!(!is_system_shortcut(0x73, false, false, false), "F4");
+        assert!(!is_system_shortcut(0x78, false, false, false), "F9: the function key remains available to the page");
+        assert!(!is_system_shortcut(0x20, false, false, false), "Space");
+        assert!(!is_system_shortcut(0x41, true, true, false), "Ctrl+Alt+A: a secret combination of the host");
+        assert!(!is_system_shortcut(0x45, false, true, true), "Ctrl+Shift+E: the sample's kiosk exit");
+        assert!(!is_system_shortcut(0x49, false, true, false), "Ctrl+I");
+        assert!(!is_system_shortcut(0x49, false, false, true), "Shift+I");
+        assert!(!is_system_shortcut(0x49, true, true, true), "AltGr+Shift+I");
+        assert!(!is_system_shortcut(0x90, false, false, false), "NumLock");
+        for key in [0x10, 0xA0, 0xA1] {
+            assert!(!is_system_shortcut(key, false, false, true), "Shift stays available to the page");
+        }
     }
 }
