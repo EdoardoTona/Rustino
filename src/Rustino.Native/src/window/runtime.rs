@@ -351,7 +351,7 @@ impl WindowRuntime {
             .store(config.visible, Ordering::Release);
 
         update_monitor_cache(&window, state);
-        let ext = ext.start(&window, state, config.decorations, callbacks.context, proxy.clone());
+        let ext = ext.start(&window, state, config.decorations, config.topmost, callbacks.context, proxy.clone());
 
         // Menu and tray events reach this window through its event loop
         let menu_events = register_event_loop(proxy.clone(), &window);

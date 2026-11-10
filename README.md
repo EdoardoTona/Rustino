@@ -134,6 +134,7 @@ window and webview exist.
 | `Maximize()` | Maximize the window |
 | `Restore()` | Restore from minimized/maximized |
 | `SetFullscreen(bool)` | Enter/exit fullscreen |
+| `SetKiosk(bool, bool disableTouchpadGestures = false)` | Enter/exit [kiosk mode](#kiosk-mode), also before the window runs |
 | `SetVisible(bool)` | Show/hide the window |
 | `Focus()` | Bring focus to the window |
 | `Activate(string? activationToken = null)` | Show and restore the window, then request focus. On Linux, pass the launcher activation token when available. |
@@ -330,6 +331,61 @@ When the user turns the entry off from the system:
 The entry points to the executable that called `Enable()`. If an update moves the app (e.g. versioned folders),
 refresh it at startup without overriding the user's choice: `if (autoStart.Status == AutoStartStatus.Enabled)
 autoStart.Enable();`. `Disable()` removes the entry; disposing the object only stops the checks.
+
+### Kiosk mode
+
+For apps that are all a machine shows (totems, tills, digital signage): in kiosk mode the window covers its screen
+and stays in front, and the user can't close it, minimize it or switch to another app. Only the app leaves it, with
+`SetKiosk(false)` or `Close()`: when and for whom is up to the app, for instance on a secret key combination or
+after a password. The keys still reach the page, which can ask for it:
+
+```csharp
+var window = new RustinoWindow()
+    .SetKiosk(true)                       // also while the window runs
+    .SetContextMenuEnabled(false)         // no browser menu on right click
+    .SetBrowserControlsEnabled(false)     // Windows: no F5, Ctrl+R, Ctrl+F, Ctrl+P
+    .Load("wwwroot/index.html");
+
+// The page sends it on its secret combination, e.g. Ctrl+Shift+E, after asking for the password
+window.WebMessageReceived += (_, message) =>
+{
+    if (message == $"exit-kiosk:{password}")
+        window.SetKiosk(false);           // or window.Close()
+};
+
+// A kiosk starts with the machine: start at login, with the automatic login of the system
+using var autoStart = new RustinoAutoStart("com.company.kiosk");
+autoStart.Enable();
+```
+
+| Platform | What `SetKiosk(true)` does | What stays |
+|---|---|---|
+| Windows | Borderless fullscreen, always on top. A keyboard hook swallows the Windows key with all its shortcuts, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc (Task Manager), Alt+F4 and Alt+Space. No edge swipes on touch screens | Ctrl+Alt+Del and Win+L, which no app can block. The three and four finger gestures of precision touchpads (desktop, task view, virtual desktops) aren't keys and no app can intercept them: the window comes back as soon as they take it away, after showing what's behind for a moment, unless `SetKiosk(true, disableTouchpadGestures: true)` turns them off (see below) |
+| macOS | The window covers the screen, over the other windows, with AppKit's presentation options for kiosks: no Dock, menu bar, Cmd+Tab, Mission Control, Force Quit (Cmd+Option+Esc), Cmd+H, logout, restart or shutdown. Cmd+Q doesn't quit | Spotlight, Siri and the screenshot shortcuts; the power button |
+| Linux | Fullscreen, above the other windows, with the keyboard grabbed: on X11 the desktop doesn't get its shortcuts (Super, Alt+Tab, Alt+F4, ...); on Wayland the compositor is asked to inhibit them, and GNOME asks the user to allow it the first time | Ctrl+Alt+F1...F12 (other consoles); on Wayland whatever the compositor keeps for itself, and windows can't take the focus back |
+
+- While the kiosk mode is on, `WindowClosing` isn't raised, and the window is restored, focused and put back in
+  fullscreen when something takes it out of there (checked twice a second). `SetFullscreen` and `SetTopMost` apply
+  once it's off: the window goes back to the state it had. `IsKiosk` tells whether it's on.
+- Nothing is changed in the system (no policies, no registry or settings): the locks end with the process, so an
+  app that crashes leaves the machine usable. For the same reason **give the app its way out before turning the
+  mode on**: on macOS not even Force Quit is there to end it (a remote shell is).
+- Windows: `SetKiosk(true, disableTouchpadGestures: true)` also sets the three and four finger gestures of the
+  touchpad to "Nothing" in the settings of the user, and puts the user's choices back when the kiosk mode ends. It's
+  the one thing that changes the system: if the app ends before (a crash, Task Manager), the gestures stay off until
+  the app leaves the kiosk mode the next time, or the user sets them again in Settings › Bluetooth & devices ›
+  Touchpad. Applying and restoring these four settings uses Explorer's internal settings cache service;
+  it is verified on Windows build 26300.9711, but future Windows updates may change that interface.
+- The window covers its own monitor: with more monitors, open a kiosk window on each.
+- Dialogs of the app keep working, over the window. A file dialog lets the user browse the disk and start other
+  apps: leave them out of a kiosk. On Linux the dialogs of other processes (the file dialogs of the portal) lose the
+  focus on X11.
+- Also turn off what the webview offers: `SetContextMenuEnabled(false)`, `SetBrowserControlsEnabled(false)`,
+  `SetDevToolsEnabled(false)` (the default), and keep the page from navigating to other sites (`Navigating`).
+- An app can only do so much: a machine left to the public also needs the lock of the system, with an account
+  without privileges. Windows has [Assigned Access and Shell Launcher](https://learn.microsoft.com/windows/configuration/assigned-access/),
+  which also take care of Ctrl+Alt+Del; on Linux a session that runs only the app (`cage`, GNOME Kiosk) leaves no
+  desktop to go back to; on macOS, a standard account with automatic login.
 
 ### Safe storage
 
@@ -948,6 +1004,7 @@ On Windows, WebView2 applies `SetCookie` and `DeleteCookie` a moment later: a `G
 | `IsMinimized` | Whether the window is minimized |
 | `IsMaximized` | Whether the window is maximized |
 | `IsFullscreen` | Whether the window is in fullscreen |
+| `IsKiosk` | Whether the window is in [kiosk mode](#kiosk-mode) |
 | `GetPosition()` | Returns `(X, Y)` position |
 | `GetSize()` | Returns `(Width, Height)` size |
 | `GetMonitors()` | Returns all connected `MonitorInfo[]` |

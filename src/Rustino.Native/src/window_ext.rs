@@ -7,6 +7,7 @@
 //! [`WindowExtRuntime::handle_event`], which also has the event loop target they need on macOS.
 
 mod exports;
+mod kiosk;
 #[cfg(target_os = "linux")]
 pub mod launcher;
 #[cfg(target_os = "macos")]
@@ -189,6 +190,10 @@ pub struct WindowExtOptions {
     pub desktop_file_name: Option<String>,
     /// Off for apps that load untrusted pages: every page can send the script's messages
     pub drag_regions: bool,
+    /// The window starts in kiosk mode
+    pub kiosk: bool,
+    /// Windows: the kiosk mode also turns off the touchpad gestures of the user
+    pub kiosk_without_touchpad_gestures: bool,
 }
 
 impl Default for WindowExtOptions {
@@ -211,6 +216,8 @@ impl Default for WindowExtOptions {
             title_bar_overlay_height: None,
             desktop_file_name: None,
             drag_regions: true,
+            kiosk: false,
+            kiosk_without_touchpad_gestures: false,
         }
     }
 }
@@ -252,6 +259,10 @@ pub enum WindowCommand {
     SetTitleBarOverlayColor(Option<(u8, u8, u8, u8)>),
     SetTitleBarOverlayHeight(Option<u32>),
     SetDesktopFileName(Option<String>),
+    /// (on, without the touchpad gestures of the system)
+    SetKiosk(bool, bool),
+    /// Time for the kiosk to take back what the window lost
+    KioskCheck,
     /// Deliver URL arguments through the registered `UrlsOpened` callback.
     DeliverUrls(Vec<String>),
     DragWindow,
@@ -359,14 +370,16 @@ impl WindowExt {
         }
     }
 
-    /// `decorated`: the decorations of the configuration, which the overlay title bar replaces
+    /// `decorated`: the decorations of the configuration, which the overlay title bar replaces.
+    /// `topmost`: always on top in the configuration, which the kiosk mode goes back to.
     pub fn start(
         self,
         window: &Window,
         state: &Arc<SharedState>,
         decorated: bool,
+        topmost: bool,
         context: *mut c_void,
-        #[allow(unused_variables)] proxy: CommandProxy,
+        proxy: CommandProxy,
     ) -> WindowExtRuntime {
         state.store_theme(theme_code(window.theme()));
         state.store_scale_factor(window.scale_factor());
@@ -387,6 +400,12 @@ impl WindowExt {
             title_bar_overlay: self.options.title_bar_overlay,
             title_bar_overlay_color: self.options.title_bar_overlay_color,
             title_bar_overlay_height: self.options.title_bar_overlay_height,
+            kiosk: kiosk::Kiosk::new(
+                proxy.clone(),
+                Arc::clone(state),
+                topmost,
+                self.options.kiosk.then_some(self.options.kiosk_without_touchpad_gestures),
+            ),
             chrome: None,
             // macOS places the traffic lights on the first update, also without drag regions
             chrome_dirty: cfg!(target_os = "macos"),
@@ -450,6 +469,7 @@ pub struct WindowExtRuntime {
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     title_bar_overlay_color: Option<(u8, u8, u8, u8)>,
     title_bar_overlay_height: Option<u32>,
+    kiosk: kiosk::Kiosk,
     /// Chrome state last sent to the page
     chrome: Option<ChromeState>,
     /// The window state changed: check the chrome state once the pending events are handled
@@ -474,6 +494,7 @@ impl WindowExtRuntime {
         window: &Window,
         webview: &wry::WebView,
     ) -> Option<Event<'a, RustinoCommand>> {
+        let event = self.kiosk.filter(event, window, target)?;
         #[cfg(target_os = "macos")]
         self.mac_title_bar.follow(&event, window);
         // The overlay title bar replaces the native decorations
@@ -661,6 +682,11 @@ impl WindowExtRuntime {
                 #[cfg(target_os = "linux")]
                 launcher::set_desktop_file_name(name);
             }
+            WindowCommand::SetKiosk(kiosk, without_touchpad_gestures) => {
+                self.kiosk.set(kiosk, without_touchpad_gestures, window, target);
+                self.chrome_dirty = true;
+            }
+            WindowCommand::KioskCheck => self.kiosk.check(window),
             WindowCommand::DeliverUrls(urls) => {
                 if let Some(callback) = self.callbacks.on_urls_opened {
                     if let Ok(payload) = CString::new(urls.join("\n")) {
@@ -759,6 +785,10 @@ impl WindowExtRuntime {
 
     /// The buttons of the overlay title bar, none in fullscreen
     fn window_controls(&mut self, window: &Window) -> Option<WindowControls> {
+        // The window covers the screen, without controls
+        if self.kiosk.is_active() {
+            return None;
+        }
         #[cfg(target_os = "macos")]
         {
             self.mac_title_bar.controls(window, self.title_bar_overlay_height)
@@ -1135,6 +1165,7 @@ mod tests {
         assert!(!options.skip_taskbar && !options.content_protection && !options.ignore_cursor_events);
         assert_eq!(options.mac_title_bar_style, MacTitleBarStyle::Default);
         assert!(!options.title_bar_overlay);
+        assert!(!options.kiosk);
     }
 
     #[test]

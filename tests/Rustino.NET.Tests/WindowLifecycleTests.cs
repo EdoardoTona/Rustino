@@ -41,6 +41,16 @@ public class WindowLifecycleTests
     }
 
     [Fact]
+    public void KioskModeIsKeptUntilTheWindowRuns()
+    {
+        using var window = new RustinoWindow();
+        Assert.False(window.IsKiosk);
+        Assert.Same(window, window.SetKiosk(true));
+        Assert.True(window.IsKiosk);
+        Assert.False(window.SetKiosk(false).IsKiosk);
+    }
+
+    [Fact]
     public void IconsWrittenFromStreamsAreDeletedWhenReplacedAndOnDispose()
     {
         var window = new RustinoWindow();

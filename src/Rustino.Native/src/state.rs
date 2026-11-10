@@ -7,6 +7,7 @@ pub struct SharedState {
     pub is_fullscreen: AtomicBool,
     pub is_visible: AtomicBool,
     pub is_focused: AtomicBool,
+    pub is_kiosk: AtomicBool,
     position: AtomicU64,
     size: AtomicU64,
     /// 0 until the window runs, 1 light, 2 dark
@@ -24,6 +25,7 @@ impl SharedState {
             is_fullscreen: AtomicBool::new(false),
             is_visible: AtomicBool::new(true),
             is_focused: AtomicBool::new(true),
+            is_kiosk: AtomicBool::new(false),
             position: AtomicU64::new(0),
             size: AtomicU64::new(pack_u32(width, height)),
             theme: AtomicU8::new(0),

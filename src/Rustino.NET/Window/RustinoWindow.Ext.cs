@@ -16,6 +16,8 @@ public partial class RustinoWindow
     private bool _maximizable = true;
     private bool _alwaysOnBottom;
     private bool _ignoreCursorEvents;
+    private bool _kiosk;
+    private bool _kioskWithoutTouchpadGestures;
     private MacTitleBarStyle _macTitleBarStyle;
     private bool _titleBarOverlay;
     private (byte R, byte G, byte B, byte A)? _titleBarOverlayColor;
@@ -230,6 +232,51 @@ public partial class RustinoWindow
     }
 
     /// <summary>
+    /// Kiosk mode, for apps that are all a machine shows (totems, tills, signage): the window covers its screen and
+    /// stays in front of the other apps, and the user can't close it, minimize it or switch to another app. Only the
+    /// app leaves it: <c>SetKiosk(false)</c>, or <see cref="Close"/>, for example on a secret key combination or
+    /// a password that the page checks (the keys still reach the page). Give the app a way out before turning it
+    /// on.
+    /// </summary>
+    /// <remarks>
+    /// <para>Windows: fullscreen and always on top, without the system shortcuts (Windows key, Alt+Tab, Alt+Esc,
+    /// Ctrl+Esc, Ctrl+Shift+Esc, Alt+F4, Alt+Space) nor the edge swipes of touch screens. Ctrl+Alt+Del and Win+L
+    /// stay: no app can block them.</para>
+    /// <para>macOS: no Dock, menu bar, Cmd+Tab, Mission Control, Force Quit, Cmd+H, Cmd+Q, logout, restart or
+    /// shutdown.</para>
+    /// <para>Linux: fullscreen and above the other windows, with the keyboard grabbed: the shortcuts of the
+    /// desktop don't work on X11, and Wayland compositors are asked to inhibit them (GNOME asks the user first).
+    /// </para>
+    /// <para>While it's on, <see cref="WindowClosing"/> isn't raised, <see cref="SetFullscreen"/> and
+    /// <see cref="SetTopMost"/> apply once it's off, and the window goes back to the state it had. Nothing is
+    /// changed in the system, unless <paramref name="disableTouchpadGestures"/> is set: an app that ends leaves
+    /// it as it was.</para>
+    /// </remarks>
+    /// <param name="disableTouchpadGestures">
+    /// Windows: also turns off the gestures of precision touchpads with three and four fingers (show the desktop,
+    /// task view, switch app or virtual desktop), which no app can intercept: without it the window comes back
+    /// right after them, but what's behind shows for a moment. It sets them to "Nothing" in the touchpad settings
+    /// of the user, and puts back the user's choices when the kiosk mode ends. If the app ends before (a crash,
+    /// Task Manager), they stay off until the app leaves the kiosk mode the next time, or the user sets them again
+    /// in Settings › Bluetooth &amp; devices › Touchpad. Read when the mode turns on.
+    /// Applying these settings uses an internal Windows shell interface, verified on build 26300.9711;
+    /// compatibility with future Windows versions depends on that interface remaining available.
+    /// </param>
+    public RustinoWindow SetKiosk(bool kiosk, bool disableTouchpadGestures = false)
+    {
+        ThrowIfDisposed();
+        _kiosk = kiosk;
+        _kioskWithoutTouchpadGestures = kiosk && disableTouchpadGestures;
+        if (Native is { } handle)
+            RustinoExtDllImports.rustino_set_kiosk(handle, kiosk ? 1 : 0, disableTouchpadGestures ? 1 : 0);
+        return this;
+    }
+
+    /// <summary>Whether the window is in kiosk mode (<see cref="SetKiosk"/>).</summary>
+    public bool IsKiosk =>
+        Native is { } handle ? RustinoExtDllImports.rustino_is_kiosk(handle) != 0 : _kiosk;
+
+    /// <summary>
     /// macOS title bar style, also while the window runs. With <see cref="MacTitleBarStyle.Overlay"/> the page makes
     /// room for the traffic lights with the CSS variables of the overlay title bar of Windows and Linux
     /// (<see cref="SetTitleBarOverlay"/>): <c>--rustino-window-controls-left</c> is their width, and
@@ -415,6 +462,8 @@ public partial class RustinoWindow
             RustinoExtDllImports.rustino_set_always_on_bottom(handle, 1);
         if (_ignoreCursorEvents)
             RustinoExtDllImports.rustino_set_ignore_cursor_events(handle, 1);
+        if (_kiosk)
+            RustinoExtDllImports.rustino_set_kiosk(handle, 1, _kioskWithoutTouchpadGestures ? 1 : 0);
         if (_macTitleBarStyle != MacTitleBarStyle.Default)
             RustinoExtDllImports.rustino_set_mac_title_bar_style(handle, (int)_macTitleBarStyle);
         if (_titleBarOverlay)

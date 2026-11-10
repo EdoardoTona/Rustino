@@ -95,6 +95,7 @@
         <button class="b" onclick="send('restore')">Restore</button>
         <button class="g" onclick="send('fullscreen')">Fullscreen</button>
         <button class="g" onclick="send('exit-fullscreen')">Exit Fullscreen</button>
+        <button class="g" onclick="send('kiosk')" title="Leave with Ctrl+Shift+E">Kiosk</button>
       </div>
     </div>
     <div class="card">
@@ -464,6 +465,10 @@
 
 <script>
   function send(msg) { window.ipc.postMessage(msg); }
+  // The way out of the kiosk mode: the keys still reach the page
+  window.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyE') send('exit-kiosk');
+  });
 
   // The browser's menu is off: right click shows the app's context menu
   addEventListener('contextmenu', () => send('show-context-menu'));

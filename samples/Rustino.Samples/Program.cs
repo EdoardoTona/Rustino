@@ -38,7 +38,7 @@ if (RustinoSplashscreen.IsSupported) // Windows only
     Thread.Sleep(3000);
 }
 
-var window = new RustinoWindow();
+var window = ConfigureBrowser(new RustinoWindow());
 // Windows opened from the page (see OpenWindow)
 var windowCount = 0;
 
@@ -239,6 +239,11 @@ void HandleMessage(string msg)
         case "restore": window.Restore(); break;
         case "fullscreen": window.SetFullscreen(true); break;
         case "exit-fullscreen": window.SetFullscreen(false); break;
+        case "kiosk":
+            window.SetKiosk(true, disableTouchpadGestures: true); // Windows: no three and four finger gestures
+            Log("Kiosk mode: leave it with Ctrl+Shift+E");
+            break;
+        case "exit-kiosk": window.SetKiosk(false); break;
         case "chromeless": SetTitleBar("Chromeless"); break;
         case "decorated": SetTitleBar("Overlay"); break;
         case "topmost-on": window.SetTopMost(true); break;
@@ -456,7 +461,8 @@ void HandleNativeMessage(string msg)
 void OpenWindow()
 {
     var number = ++windowCount;
-    var other = new RustinoWindow()
+    var other = ConfigureBrowser(new RustinoWindow())
+        .SetLogger(logger)
         .SetTitle($"Window {number}")
         .SetUseOsDefaultSize(false)
         .SetSize(480, 320)
@@ -471,11 +477,29 @@ void OpenWindow()
     other.WindowClosed += (_, _) => Log($"Window {number} closed");
     new Thread(() =>
     {
-        other.WaitForClose();
-        other.Dispose();
+        try
+        {
+            other.WaitForClose();
+        }
+        catch (Exception error)
+        {
+            logger.LogError(error, "Could not open window {Number}", number);
+            Log($"Window {number} could not open: {error.Message}");
+        }
+        finally
+        {
+            other.Dispose();
+        }
     }) { IsBackground = true }.Start();
-    Log($"Window {number} opened");
+    Log($"Opening window {number}");
 }
+
+// Windows sharing WebView2's default profile must use the same browser process options.
+static RustinoWindow ConfigureBrowser(RustinoWindow target) => target
+    .SetIgnoreCertificateErrorsEnabled(true)
+    .SetWebSecurityEnabled(false)
+    .SetMediaAutoplayEnabled(true)
+    .SetScrollBarStyle(ScrollBarStyle.FluentOverlay);
 
 void HandleWebViewMessage(string msg)
 {
@@ -557,13 +581,9 @@ window
     .SetBackgroundColor(26, 26, 46)
     .SetDevToolsEnabled(true)
     .SetJavascriptClipboardAccessEnabled(false)
-    .SetIgnoreCertificateErrorsEnabled(true)
-    .SetWebSecurityEnabled(false)
-    .SetMediaAutoplayEnabled(true)
     .SetZoomHotkeysEnabled(true)
     // Right click shows the app's context menu (see the contextmenu listener in the page)
     .SetContextMenuEnabled(false)
-    .SetScrollBarStyle(ScrollBarStyle.FluentOverlay)
     .SetFileDropEnabled(true)
     .AddInitScript("""
         window.addEventListener('message', (e) => {

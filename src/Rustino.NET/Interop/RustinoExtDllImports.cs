@@ -44,6 +44,12 @@ internal static partial class RustinoExtDllImports
     internal static extern void rustino_set_closable(RustinoWindowHandle instance, int closable);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void rustino_set_kiosk(RustinoWindowHandle instance, int kiosk, int withoutTouchpadGestures);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int rustino_is_kiosk(RustinoWindowHandle instance);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void rustino_set_minimizable(RustinoWindowHandle instance, int minimizable);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]

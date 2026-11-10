@@ -192,6 +192,29 @@ pub unsafe extern "C" fn rustino_set_title_bar_overlay_height(instance: *mut Rus
     };
 }
 
+/// Kiosk mode: the window covers its screen and stays in front, and the user can't close it,
+/// minimize it or switch to another app, until the host turns it off (see `kiosk`).
+/// `without_touchpad_gestures` (Windows): the gestures with three and four fingers of the user's
+/// touchpad settings are off meanwhile.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_set_kiosk(instance: *mut RustinoWindow, kiosk: i32, without_touchpad_gestures: i32) {
+    let (on, gestures_off) = (kiosk != 0, without_touchpad_gestures != 0);
+    unsafe {
+        set_window_feature(instance, super::WindowCommand::SetKiosk(on, gestures_off), |o| {
+            o.kiosk = on;
+            o.kiosk_without_touchpad_gestures = gestures_off;
+        })
+    };
+}
+
+/// Whether the running window is in kiosk mode
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustino_is_kiosk(instance: *mut RustinoWindow) -> i32 {
+    use std::sync::atomic::Ordering;
+    catch_unwind(|| unsafe { instance.as_ref() }.map_or(0, |inst| i32::from(inst.state.is_kiosk.load(Ordering::Acquire))))
+        .unwrap_or(0)
+}
+
 /// Pre-run only: 0 once the window started. Without drag regions no page can move, resize or
 /// maximize the window through the `__rustino:` messages, which reach the host instead.
 #[unsafe(no_mangle)]
