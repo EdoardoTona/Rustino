@@ -394,6 +394,7 @@ impl WindowExt {
             mac_title_bar: MacTitleBar::new(
                 self.options.mac_title_bar_style,
                 self.options.traffic_light_position,
+                window,
                 proxy,
             ),
             #[cfg(target_os = "linux")]
@@ -566,6 +567,11 @@ impl WindowExtRuntime {
                 }
                 // macOS and Linux don't report the themes set by the app
                 self.theme_changed(window.theme());
+                // AppKit lays out the title bar again, with the traffic lights in their place
+                #[cfg(target_os = "macos")]
+                {
+                    self.chrome_dirty = true;
+                }
             }
             WindowCommand::SetProgressBar(state, progress) => set_progress_bar(window, state, progress),
             WindowCommand::RequestUserAttention(kind) => window.request_user_attention(kind),
@@ -704,7 +710,10 @@ impl WindowExtRuntime {
             #[cfg(target_os = "linux")]
             WindowCommand::CheckTheme => self.theme_changed(window.theme()),
             #[cfg(target_os = "macos")]
-            WindowCommand::CheckTrafficLights => self.chrome_dirty = true,
+            WindowCommand::CheckTrafficLights => {
+                self.mac_title_bar.check_received();
+                self.chrome_dirty = true;
+            }
         }
     }
 
@@ -724,16 +733,27 @@ impl WindowExtRuntime {
     }
 
     fn update_chrome(&mut self, window: &Window, webview: &wry::WebView, force: bool) {
+        // Leaving fullscreen: the page already has the window controls, the lights come next
+        #[cfg(target_os = "macos")]
+        if self.mac_title_bar.leaving_fullscreen(window) {
+            self.chrome_dirty = true;
+            return;
+        }
         let chrome = ChromeState {
             border: resize_border(window),
             controls: self.window_controls(window),
         };
+        let Ok(json) = serde_json::to_string(&chrome) else { return };
+        let script = format!("window.__rustino_window && window.__rustino_window.setState({json})");
+        #[cfg(target_os = "macos")]
+        self.mac_title_bar
+            .remember_chrome(window, webview, chrome.controls.is_some().then_some(script.as_str()));
+        // Leaving fullscreen, the page got the window controls it had before: not from here
+        #[cfg(target_os = "macos")]
+        let force = force || self.mac_title_bar.take_chrome_pushed();
         if force || self.chrome.as_ref() != Some(&chrome) {
-            let Ok(json) = serde_json::to_string(&chrome) else { return };
             self.chrome = Some(chrome);
-            let _ = webview.evaluate_script(&format!(
-                "window.__rustino_window && window.__rustino_window.setState({json})"
-            ));
+            let _ = webview.evaluate_script(&script);
         }
     }
 

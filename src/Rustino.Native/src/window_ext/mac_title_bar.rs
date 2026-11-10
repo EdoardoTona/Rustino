@@ -1,6 +1,7 @@
 //! The title bar of macOS: its styles, and the traffic lights under the overlay title bar.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
@@ -26,8 +27,8 @@ pub(super) struct MacTitleBar {
     default_lights: Option<TrafficLights>,
     /// Where Rustino put the traffic lights: tao's inset and the left and top margins it gives
     placed: Option<((f64, f64), (f64, f64))>,
-    /// Keeps the lights where Rustino put them while the window resizes
-    resize_observer: Option<Retained<ResizeObserver>>,
+    /// Follows what the event loop sees too late: animated resizes and the way out of fullscreen
+    observer: Option<Retained<WindowObserver>>,
     proxy: CommandProxy,
     /// Checks in a row that found the lights moved back
     checks: u8,
@@ -37,54 +38,172 @@ define_class!(
     // SAFETY: NSObject has no subclassing requirements, and the class doesn't implement `Drop`
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "RustinoTrafficLightsObserver"]
-    // tao's inset of the lights, while Rustino places them
-    #[ivars = Cell<Option<(f64, f64)>>]
-    struct ResizeObserver;
+    #[name = "RustinoTitleBarObserver"]
+    #[ivars = Observed]
+    struct WindowObserver;
 
-    impl ResizeObserver {
+    impl WindowObserver {
         // AppKit puts the lights back at each step of a resize. The event loop moves them again
         // on the `Resized` event, but it doesn't run during an animated resize (zoom, double
         // click on the title bar): the lights would stay in their default place until its end.
         #[unsafe(method(windowDidResize:))]
         fn window_did_resize(&self, notification: &AnyObject) {
-            let Some((x, y)) = self.ivars().get() else {
+            let Some((x, y)) = self.ivars().inset.get() else {
                 return;
             };
             let ns_window: *mut AnyObject = unsafe { msg_send![notification, object] };
             if !ns_window.is_null() && !has_fullscreen_mask(ns_window) {
+                let state = self.ivars();
+                state.placing.set(true);
                 unsafe {
                     layout_title_bar(ns_window);
                     move_traffic_lights(ns_window, x, y);
                 }
+                state.placing.set(false);
             }
+        }
+
+        // AppKit lays out the title bar again, with the lights back in their default place, on
+        // changes it doesn't tell about (the theme, the style, the decorations, ...): the
+        // event loop checks the lights as soon as it has laid them out.
+        #[unsafe(method(titleBarFrameDidChange:))]
+        fn title_bar_frame_did_change(&self, _notification: &AnyObject) {
+            let state = self.ivars();
+            if state.watching.get()
+                && !state.placing.get()
+                && !state.check_requested.get()
+                && state.inset.get().is_some()
+            {
+                state.check_requested.set(true);
+                let _ = state.proxy.send_event(RustinoCommand::Window(WindowCommand::CheckTrafficLights));
+            }
+        }
+
+        // The animation that leaves fullscreen shows the lights, back in the window, over the
+        // page as it is when the animation starts. tao reports the window as windowed only at
+        // its end, when the user leaves fullscreen: until then the page would have no room for
+        // the lights, which would sit over it in their default place.
+        #[unsafe(method(windowWillExitFullScreen:))]
+        fn window_will_exit_full_screen(&self, _notification: &AnyObject) {
+            let state = self.ivars();
+            state.leaving_fullscreen.set(Some(Instant::now()));
+            // Now, for the page to make room before the animation starts
+            if let Some((webview, script)) = &*state.windowed_chrome.borrow() {
+                let script = objc2_foundation::NSString::from_str(script);
+                let _: () = unsafe {
+                    msg_send![
+                        &**webview,
+                        evaluateJavaScript: &*script,
+                        completionHandler: std::ptr::null_mut::<AnyObject>(),
+                    ]
+                };
+                state.chrome_pushed.set(true);
+            }
+            // The lights come back to the window after this notification: the event loop
+            // places them then
+            let _ = state.proxy.send_event(RustinoCommand::Window(WindowCommand::CheckTrafficLights));
+        }
+
+        #[unsafe(method(windowDidExitFullScreen:))]
+        fn window_did_exit_full_screen(&self, _notification: &AnyObject) {
+            let state = self.ivars();
+            state.leaving_fullscreen.set(None);
+            let _ = state.proxy.send_event(RustinoCommand::Window(WindowCommand::CheckTrafficLights));
         }
     }
 );
 
-impl ResizeObserver {
-    /// Observes the resizes of the window, until dropped by `MacTitleBar`.
-    fn new(ns_window: *mut AnyObject, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Cell::new(None));
+/// What the observer of a window shares with its `MacTitleBar`.
+struct Observed {
+    proxy: CommandProxy,
+    /// tao's inset of the lights, while Rustino places them
+    inset: Cell<Option<(f64, f64)>>,
+    /// When the window started to leave fullscreen, until it's windowed again
+    leaving_fullscreen: Cell<Option<Instant>>,
+    /// The webview and the script that gives its page the window controls, as last run while
+    /// the window was not in fullscreen
+    windowed_chrome: RefCell<Option<(Retained<AnyObject>, String)>>,
+    /// The observer ran that script: the page no longer has the chrome the event loop gave it
+    chrome_pushed: Cell<bool>,
+    /// The view AppKit lays out the title bar in, observed for the changes of its frame
+    title_bar: RefCell<Option<Retained<AnyObject>>>,
+    /// AppKit's changes to the title bar ask for a check of the lights. Not when it keeps
+    /// undoing what Rustino does: the two would move the lights in turn, without end
+    watching: Cell<bool>,
+    /// Rustino is placing the lights: the changes to the title bar are its own
+    placing: Cell<bool>,
+    /// A check of the lights is on its way to the event loop
+    check_requested: Cell<bool>,
+}
+
+impl WindowObserver {
+    /// Observes the window until dropped by `MacTitleBar`.
+    fn new(ns_window: *mut AnyObject, proxy: CommandProxy, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Observed {
+            proxy,
+            inset: Cell::new(None),
+            leaving_fullscreen: Cell::new(None),
+            windowed_chrome: RefCell::new(None),
+            chrome_pushed: Cell::new(false),
+            title_bar: RefCell::new(None),
+            watching: Cell::new(true),
+            placing: Cell::new(false),
+            check_requested: Cell::new(false),
+        });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        let name = objc2_foundation::NSString::from_str("NSWindowDidResizeNotification");
-        unsafe {
+        let observe = |name: &str, selector: objc2::runtime::Sel| unsafe {
             let center: *mut AnyObject = msg_send![objc2::class!(NSNotificationCenter), defaultCenter];
+            let name = objc2_foundation::NSString::from_str(name);
+            let _: () = msg_send![center, addObserver: &*this, selector: selector, name: &*name, object: ns_window];
+        };
+        observe("NSWindowDidResizeNotification", sel!(windowDidResize:));
+        observe("NSWindowWillExitFullScreenNotification", sel!(windowWillExitFullScreen:));
+        observe("NSWindowDidExitFullScreenNotification", sel!(windowDidExitFullScreen:));
+        this
+    }
+
+    /// Observes the view that holds the lights of the window, which changes with its decorations.
+    fn watch_title_bar(&self, ns_window: *mut AnyObject) {
+        let name = objc2_foundation::NSString::from_str("NSViewFrameDidChangeNotification");
+        unsafe {
+            let close: *mut AnyObject = msg_send![ns_window, standardWindowButton: 0usize];
+            if close.is_null() {
+                return;
+            }
+            let title_bar: *mut AnyObject = msg_send![close, superview];
+            let container: *mut AnyObject = msg_send![title_bar, superview];
+            let mut watched = self.ivars().title_bar.borrow_mut();
+            if container.is_null() || watched.as_ref().is_some_and(|view| Retained::as_ptr(view) == container.cast_const()) {
+                return;
+            }
+            let center: *mut AnyObject = msg_send![objc2::class!(NSNotificationCenter), defaultCenter];
+            if let Some(old) = watched.take() {
+                let _: () = msg_send![center, removeObserver: self, name: &*name, object: &*old];
+            }
+            let _: () = msg_send![container, setPostsFrameChangedNotifications: true];
             let _: () = msg_send![
                 center,
-                addObserver: &*this,
-                selector: sel!(windowDidResize:),
+                addObserver: self,
+                selector: sel!(titleBarFrameDidChange:),
                 name: &*name,
-                object: ns_window,
+                object: container,
             ];
+            *watched = Retained::retain(container);
         }
-        this
+    }
+
+    /// A transition that never ends (AppKit can fail to leave fullscreen) is over after a while.
+    fn leaving_fullscreen(&self) -> bool {
+        self.ivars().leaving_fullscreen.get().is_some_and(|since| since.elapsed() < LEAVING_FULLSCREEN_TIMEOUT)
     }
 }
 
+/// Longer than the animation that leaves fullscreen (about half a second).
+const LEAVING_FULLSCREEN_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl Drop for MacTitleBar {
     fn drop(&mut self) {
-        if let Some(observer) = self.resize_observer.take() {
+        if let Some(observer) = self.observer.take() {
             unsafe {
                 let center: *mut AnyObject = msg_send![objc2::class!(NSNotificationCenter), defaultCenter];
                 let _: () = msg_send![center, removeObserver: &*observer];
@@ -105,32 +224,81 @@ pub(super) struct TrafficLights {
 }
 
 impl MacTitleBar {
-    pub(super) fn new(style: MacTitleBarStyle, traffic_lights: Option<(f64, f64)>, proxy: CommandProxy) -> Self {
+    pub(super) fn new(
+        style: MacTitleBarStyle,
+        traffic_lights: Option<(f64, f64)>,
+        window: &Window,
+        proxy: CommandProxy,
+    ) -> Self {
+        use tao::platform::macos::WindowExtMacOS;
+        // The event loop runs on the main thread
+        let observer = MainThreadMarker::new()
+            .map(|mtm| WindowObserver::new(window.ns_window().cast(), proxy.clone(), mtm));
         Self {
             style,
             traffic_lights,
             pending: false,
             default_lights: None,
             placed: None,
-            resize_observer: None,
+            observer,
             proxy,
             checks: 0,
         }
     }
 
     /// Records where the lights are, also for the resizes that follow.
-    fn set_placed(&mut self, window: &Window, placed: Option<((f64, f64), (f64, f64))>) {
-        use tao::platform::macos::WindowExtMacOS;
+    fn set_placed(&mut self, placed: Option<((f64, f64), (f64, f64))>) {
         self.placed = placed;
-        if self.resize_observer.is_none()
-            && placed.is_some()
-            && let Some(mtm) = MainThreadMarker::new()
-        {
-            self.resize_observer = Some(ResizeObserver::new(window.ns_window().cast(), mtm));
+        if let Some(observer) = &self.observer {
+            observer.ivars().inset.set(placed.map(|(inset, _)| inset));
         }
-        if let Some(observer) = &self.resize_observer {
-            observer.ivars().set(placed.map(|(inset, _)| inset));
+    }
+
+    /// In fullscreen the window has no lights. tao and the style mask tell, each ahead of the
+    /// other in some transitions; on the way out only the style mask does: the lights are back
+    /// as soon as it changes.
+    fn in_fullscreen(&self, window: &Window) -> bool {
+        use tao::platform::macos::WindowExtMacOS;
+        let mask = has_fullscreen_mask(window.ns_window().cast());
+        if self.observer.as_ref().is_some_and(|observer| observer.leaving_fullscreen()) {
+            mask
+        } else {
+            mask || window.fullscreen().is_some()
         }
+    }
+
+    /// The window started to leave fullscreen and its page already has the window controls,
+    /// but the lights aren't back yet: the chrome waits for them.
+    pub(super) fn leaving_fullscreen(&self, window: &Window) -> bool {
+        self.observer.as_ref().is_some_and(|observer| observer.leaving_fullscreen()) && self.in_fullscreen(window)
+    }
+
+    /// Whether the observer gave the page the window controls since the last call: the chrome
+    /// the event loop sent before is no longer the one of the page.
+    pub(super) fn take_chrome_pushed(&self) -> bool {
+        self.observer.as_ref().is_some_and(|observer| observer.ivars().chrome_pushed.replace(false))
+    }
+
+    /// The event loop got the check that the observer asked for.
+    pub(super) fn check_received(&self) {
+        if let Some(observer) = &self.observer {
+            observer.ivars().check_requested.set(false);
+        }
+    }
+
+    /// Keeps the script that gives the page the window controls (`None` without controls), to
+    /// run it again as soon as the window leaves fullscreen.
+    pub(super) fn remember_chrome(&self, window: &Window, webview: &wry::WebView, script: Option<&str>) {
+        use wry::WebViewExtMacOS;
+        let Some(observer) = &self.observer else { return };
+        if self.in_fullscreen(window) {
+            return;
+        }
+        let chrome = script.and_then(|script| {
+            let webview = Retained::as_ptr(&webview.webview()) as *mut AnyObject;
+            Some((unsafe { Retained::retain(webview) }?, script.to_owned()))
+        });
+        *observer.ivars().windowed_chrome.borrow_mut() = chrome;
     }
 
     /// Called before `dispatch_command` runs the event.
@@ -152,6 +320,11 @@ impl MacTitleBar {
 
     pub(super) fn set_style(&mut self, style: MacTitleBarStyle, window: &Window) {
         self.style = style;
+        // In fullscreen the page gets the new chrome only when the window leaves it: not the
+        // one of the old style first
+        if let Some(observer) = &self.observer {
+            observer.ivars().windowed_chrome.borrow_mut().take();
+        }
         // Chromeless windows get the style with their decorations
         if window.is_decorated() && !self.pending {
             self.apply(window);
@@ -175,7 +348,7 @@ impl MacTitleBar {
     /// their width and, unless the host sets a height, as high a title bar as their margin above
     /// gives them.
     pub(super) fn controls(&mut self, window: &Window, height: Option<u32>) -> Option<WindowControls> {
-        if self.pending || in_fullscreen(window) {
+        if self.pending || self.in_fullscreen(window) {
             return None;
         }
         let overlay = self.style == MacTitleBarStyle::Overlay && window.is_decorated();
@@ -203,6 +376,22 @@ impl MacTitleBar {
     /// height they go back where they were.
     fn place_lights(&mut self, window: &Window, height: Option<u32>) {
         use tao::platform::macos::WindowExtMacOS;
+        if let Some(observer) = &self.observer {
+            observer.ivars().placing.set(true);
+        }
+        self.place_lights_now(window, height);
+        if let Some(observer) = &self.observer {
+            let state = observer.ivars();
+            state.placing.set(false);
+            // AppKit moved the lights back after each of the last checks: no more of them
+            // until the lights stay in place
+            state.watching.set(self.checks < MAX_CHECKS);
+            observer.watch_title_bar(window.ns_window().cast());
+        }
+    }
+
+    fn place_lights_now(&mut self, window: &Window, height: Option<u32>) {
+        use tao::platform::macos::WindowExtMacOS;
         unsafe { layout_title_bar(window.ns_window().cast()) };
         let Some(lights) = traffic_lights(window) else { return };
         if self.placed.is_none() && self.traffic_lights.is_none() {
@@ -216,7 +405,7 @@ impl MacTitleBar {
             }
             set_traffic_light_inset_now(window, x, y);
             let placed = traffic_lights(window).map(|lights| ((x, y), (lights.left, lights.top)));
-            self.set_placed(window, placed);
+            self.set_placed(placed);
         } else {
             let target = match (height, self.default_lights) {
                 (Some(height), Some(default)) => {
@@ -228,7 +417,7 @@ impl MacTitleBar {
             };
             if at(target) {
                 if height.is_none() {
-                    self.set_placed(window, None);
+                    self.set_placed(None);
                 }
                 self.checks = 0;
                 return;
@@ -244,11 +433,11 @@ impl MacTitleBar {
                     _ => break,
                 }
             }
-            self.set_placed(window, height.map(|_| ((x, y), target)));
+            self.set_placed(height.map(|_| ((x, y), target)));
         }
         // AppKit lays out the title bar again after a change of style or decorations, later
         // and without telling: check once it's done, a few times at most
-        if self.checks < 3 {
+        if self.checks < MAX_CHECKS {
             self.checks += 1;
             let proxy = self.proxy.clone();
             std::thread::spawn(move || {
@@ -259,14 +448,11 @@ impl MacTitleBar {
     }
 }
 
+/// Checks in a row that can find the lights moved back by AppKit, before giving up.
+const MAX_CHECKS: u8 = 3;
+
 /// Bounds tao's y for the traffic lights, against measures taken while AppKit moves them.
 const MAX_TRAFFIC_LIGHT_INSET: f64 = 200.0;
-
-/// Also while the window goes in and out of fullscreen, when tao no longer or not yet reports it.
-fn in_fullscreen(window: &Window) -> bool {
-    use tao::platform::macos::WindowExtMacOS;
-    window.fullscreen().is_some() || has_fullscreen_mask(window.ns_window().cast())
-}
 
 fn has_fullscreen_mask(ns_window: *mut AnyObject) -> bool {
     // NSWindowStyleMaskFullScreen
