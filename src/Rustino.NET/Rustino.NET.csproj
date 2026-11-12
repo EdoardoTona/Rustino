@@ -41,9 +41,11 @@
       Staged cross-platform binaries follow the app to its output/publish directory and ship inside
       the NuGet package for RID-aware consumers. They must not also be Content with Pack="false":
       NuGet pack excludes those files by path, which would drop them from the package as well.
-      PackagePath="/" because NuGet appends the relative path (runtimes/<rid>/native/...).
+      The package path is explicit: with several target frameworks NuGet doesn't keep the
+      runtimes/ folder of the default None items.
     -->
-    <None Update="runtimes/**/*" Pack="true" PackagePath="/" CopyToOutputDirectory="PreserveNewest" />
+    <None Remove="runtimes/**/*" />
+    <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- NuGet packaging -->
@@ -57,7 +59,8 @@
 
   <!-- Dependencies -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- Part of the shared framework from .NET 11 -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Condition="'$(TargetFramework)' == 'net10.0'" />
   </ItemGroup>
 
 </Project>
