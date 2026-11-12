@@ -240,13 +240,15 @@ public partial class RustinoWindow
     /// </summary>
     /// <remarks>
     /// <para>Windows: fullscreen and always on top, without the system shortcuts (Windows key, Alt+Tab, Alt+Esc,
-    /// Ctrl+Esc, Ctrl+Shift+Esc, Alt+F4, Alt+Space), PrintScreen, Search/Home, application launch keys, Sleep,
-    /// F12, Ctrl+Shift+I and Alt+Shift+NumLock, nor the edge swipes of touch screens. Ctrl+Alt+Del and Win+L stay:
-    /// no app can block them.</para>
-    /// <para>Windows also temporarily disables the activation shortcuts for Sticky Keys, Filter Keys, Mouse Keys
-    /// and High Contrast. Enabled features keep working. The shortcut flags are restored after the app's last
-    /// kiosk window exits; after a forced process exit, a later kiosk session recovers them. Signing out also
-    /// restores the user's stored accessibility preferences.</para>
+    /// Ctrl+Esc, Ctrl+Shift+Esc, Alt+F4, Alt+Space), PrintScreen, Search/Home, application launch keys and
+    /// Alt+Shift+NumLock, nor the edge swipes of touch screens. Ctrl+Alt+Del, Win+L and the power and sleep
+    /// buttons stay: no app can block them. F12 and Ctrl+Shift+I open the developer tools only with
+    /// <see cref="SetDevToolsEnabled"/>.</para>
+    /// <para>Windows also temporarily disables the activation shortcuts for Sticky Keys, Filter Keys, Toggle
+    /// Keys, Mouse Keys and High Contrast. Enabled features keep working. The shortcut flags are restored after
+    /// the last kiosk window exits, of this app and of any other in kiosk mode in the same login; after a forced
+    /// process exit, a later kiosk session recovers them. Signing out also restores the user's stored
+    /// accessibility preferences.</para>
     /// <para>macOS: no Dock, menu bar, Cmd+Tab, Mission Control, Force Quit, Cmd+H, Cmd+Q, logout, restart or
     /// shutdown.</para>
     /// <para>Linux: fullscreen and above the other windows, with the keyboard grabbed: the shortcuts of the

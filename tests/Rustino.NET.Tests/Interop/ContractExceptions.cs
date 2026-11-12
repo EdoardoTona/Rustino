@@ -28,8 +28,13 @@ internal static class ContractExceptions
     {
     };
 
-    /// <summary>#[repr(C)] structs that never cross the boundary: struct name → reason.</summary>
+    /// <summary>
+    /// #[repr(C)] structs that never cross the boundary: struct name → reason. They aren't in the layout
+    /// snapshot either: in the Rust source their attribute line ends with
+    /// <c>// abi_layout: not shared with .NET</c> (see src/abi_layout.rs).
+    /// </summary>
     public static readonly IReadOnlyDictionary<string, string> RustOnlyStructs = new Dictionary<string, string>
     {
+        ["SettingsCacheVtable"] = "the vtable of a Windows shell COM interface, used only inside the native library",
     };
 }

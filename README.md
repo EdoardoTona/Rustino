@@ -360,7 +360,7 @@ autoStart.Enable();
 
 | Platform | What `SetKiosk(true)` does | What stays |
 |---|---|---|
-| Windows | Borderless fullscreen, always on top. A keyboard hook swallows the Windows key with all its shortcuts, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc (Task Manager), Alt+F4, Alt+Space, dedicated Search/Home and app launch keys, PrintScreen, Sleep, F12, Ctrl+Shift+I and Alt+Shift+NumLock. Accessibility activation shortcuts and touch screen edge swipes are disabled | Ctrl+Alt+Del and Win+L, which no app can block. The three and four finger gestures of precision touchpads (desktop, task view, virtual desktops) aren't keys and no app can intercept them: the window comes back as soon as they take it away, after showing what's behind for a moment, unless `SetKiosk(true, disableTouchpadGestures: true)` turns them off (see below) |
+| Windows | Borderless fullscreen, always on top. A keyboard hook swallows the Windows key with all its shortcuts, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc (Task Manager), Alt+F4, Alt+Space, dedicated Search/Home and app launch keys, PrintScreen and Alt+Shift+NumLock. Accessibility activation shortcuts and touch screen edge swipes are disabled | Ctrl+Alt+Del and Win+L, which no app can block, and the power and sleep buttons. F12 and Ctrl+Shift+I open the developer tools only with `SetDevToolsEnabled(true)`. The three and four finger gestures of precision touchpads (desktop, task view, virtual desktops) aren't keys and no app can intercept them: the window comes back as soon as they take it away, after showing what's behind for a moment, unless `SetKiosk(true, disableTouchpadGestures: true)` turns them off (see below) |
 | macOS | The window covers the screen, over the other windows, with AppKit's presentation options for kiosks: no Dock, menu bar, Cmd+Tab, Mission Control, Force Quit (Cmd+Option+Esc), Cmd+H, logout, restart or shutdown. Cmd+Q doesn't quit | Spotlight, Siri and the screenshot shortcuts; the power button |
 | Linux | Fullscreen, above the other windows, with the keyboard grabbed: on X11 the desktop doesn't get its shortcuts (Super, Alt+Tab, Alt+F4, ...); on Wayland the compositor is asked to inhibit them, and GNOME asks the user to allow it the first time | Ctrl+Alt+F1...F12 (other consoles); on Wayland whatever the compositor keeps for itself, and windows can't take the focus back |
 
@@ -370,10 +370,12 @@ autoStart.Enable();
 - The window and keyboard locks end with the process; no system policies are installed. **Give the app its way
   out before turning the mode on**: on macOS not even Force Quit is there to end it (a remote shell is).
 - Windows temporarily disables the activation shortcuts for Sticky Keys (Shift five times), Filter Keys (right
-  Shift for eight seconds), Mouse Keys and High Contrast. Features already enabled keep working, and Shift still
-  reaches the page. The original shortcut flags are restored after the app's last kiosk window exits. Rustino keeps
-  a temporary recovery copy for the current login: after a forced process exit, the shortcuts stay disabled until
-  a later kiosk session ends or the user signs out. The user's stored Windows accessibility preferences are unchanged.
+  Shift for eight seconds), Toggle Keys (NumLock for five seconds), Mouse Keys and High Contrast. Features already
+  enabled keep working, and Shift and NumLock still reach the page. The original shortcut flags are restored after
+  the last kiosk window exits, of this app and of any other Rustino app in kiosk mode in the same login. Rustino
+  keeps a temporary recovery copy for the current login: after a forced process exit, the shortcuts stay disabled
+  until a later kiosk session ends or the user signs out. The user's stored Windows accessibility preferences are
+  unchanged.
 - Windows: `SetKiosk(true, disableTouchpadGestures: true)` also sets the three and four finger gestures of the
   touchpad to "Nothing" in the settings of the user, and puts the user's choices back when the kiosk mode ends.
   These touchpad settings are persisted: if the app ends before (a crash, Task Manager), the gestures stay off until

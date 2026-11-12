@@ -2,25 +2,33 @@
 //! The features themselves remain usable. Changes affect this logon session, without updating
 //! the user profile. A volatile backup scoped to this logon lets a later kiosk restore the
 //! original shortcuts after a forced process exit.
+//!
+//! The settings belong to the logon, not to the process: the processes in kiosk mode share the
+//! backup, and the last one that leaves restores it.
 
 use std::sync::Mutex;
 
-use windows::Win32::Foundation::{CloseHandle, E_FAIL, ERROR_FILE_NOT_FOUND, HANDLE, HLOCAL, LocalFree};
+use windows::Win32::Foundation::{CloseHandle, E_FAIL, ERROR_FILE_NOT_FOUND, HANDLE};
 use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_STATISTICS, TokenStatistics};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_OPTION_VOLATILE, RRF_RT_REG_DWORD,
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW, RegSetKeyValueW,
 };
-use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows::Win32::UI::Accessibility::{FILTERKEYS, HCF_OPTION_NOTHEMECHANGE, HIGHCONTRASTW, MOUSEKEYS, STICKYKEYS};
+use windows::Win32::System::Threading::{
+    CreateEventW, CreateMutexW, GetCurrentProcess, INFINITE, OpenEventW, OpenProcessToken, ReleaseMutex,
+    SYNCHRONIZATION_SYNCHRONIZE, WaitForSingleObject,
+};
+use windows::Win32::UI::Accessibility::{
+    FILTERKEYS, HCF_OPTION_NOTHEMECHANGE, HIGHCONTRASTW, MOUSEKEYS, STICKYKEYS, TOGGLEKEYS,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SPI_GETFILTERKEYS, SPI_GETHIGHCONTRAST, SPI_GETMOUSEKEYS, SPI_GETSTICKYKEYS,
-    SPI_SETFILTERKEYS, SPI_SETHIGHCONTRAST, SPI_SETMOUSEKEYS, SPI_SETSTICKYKEYS,
+    SPI_GETFILTERKEYS, SPI_GETHIGHCONTRAST, SPI_GETMOUSEKEYS, SPI_GETSTICKYKEYS, SPI_GETTOGGLEKEYS,
+    SPI_SETFILTERKEYS, SPI_SETHIGHCONTRAST, SPI_SETMOUSEKEYS, SPI_SETSTICKYKEYS, SPI_SETTOGGLEKEYS,
     SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
 use windows::core::{Error, HSTRING, PCWSTR};
 
-// HOTKEYACTIVE and CONFIRMHOTKEY have the same values in all four structures. Preserve
+// HOTKEYACTIVE and CONFIRMHOTKEY have the same values in all five structures. Preserve
 // every other flag, including FEATUREON, so existing accessibility features keep working.
 const SHORTCUT_FLAGS: u32 = 0x04 | 0x08;
 
@@ -28,17 +36,26 @@ const SHORTCUT_FLAGS: u32 = 0x04 | 0x08;
 enum Setting {
     StickyKeys,
     FilterKeys,
+    /// NumLock held for five seconds
+    ToggleKeys,
     MouseKeys,
     HighContrast,
 }
 
 impl Setting {
-    const ALL: [Self; 4] = [Self::StickyKeys, Self::FilterKeys, Self::MouseKeys, Self::HighContrast];
+    const ALL: [Self; 5] = [
+        Self::StickyKeys,
+        Self::FilterKeys,
+        Self::ToggleKeys,
+        Self::MouseKeys,
+        Self::HighContrast,
+    ];
 
     fn name(self) -> &'static str {
         match self {
             Self::StickyKeys => "StickyKeys",
             Self::FilterKeys => "FilterKeys",
+            Self::ToggleKeys => "ToggleKeys",
             Self::MouseKeys => "MouseKeys",
             Self::HighContrast => "HighContrast",
         }
@@ -54,32 +71,28 @@ impl Setting {
                 FILTERKEYS { cbSize: size_of::<FILTERKEYS>() as u32, ..Default::default() },
                 SPI_GETFILTERKEYS, SPI_SETFILTERKEYS, |p| &mut p.dwFlags, replace,
             ),
+            Self::ToggleKeys => update(
+                TOGGLEKEYS { cbSize: size_of::<TOGGLEKEYS>() as u32, ..Default::default() },
+                SPI_GETTOGGLEKEYS, SPI_SETTOGGLEKEYS, |p| &mut p.dwFlags, replace,
+            ),
             Self::MouseKeys => update(
                 MOUSEKEYS { cbSize: size_of::<MOUSEKEYS>() as u32, ..Default::default() },
                 SPI_GETMOUSEKEYS, SPI_SETMOUSEKEYS, |p| &mut p.dwFlags, replace,
             ),
+            // The scheme name the system fills in is passed back as it came and never freed.
+            // The documentation of HIGHCONTRASTW says to free it with LocalFree, but user32
+            // keeps the buffer and hands out the same one at every call: on Windows 11 26200
+            // the call after a LocalFree ends the process with STATUS_HEAP_CORRUPTION.
             Self::HighContrast => update(
-                Contrast(HIGHCONTRASTW { cbSize: size_of::<HIGHCONTRASTW>() as u32, ..Default::default() }),
+                HIGHCONTRASTW { cbSize: size_of::<HIGHCONTRASTW>() as u32, ..Default::default() },
                 SPI_GETHIGHCONTRAST, SPI_SETHIGHCONTRAST,
                 |p| {
                     // Changing only a shortcut must not reload the desktop theme.
-                    p.0.dwFlags |= HCF_OPTION_NOTHEMECHANGE;
-                    &mut p.0.dwFlags.0
+                    p.dwFlags |= HCF_OPTION_NOTHEMECHANGE;
+                    &mut p.dwFlags.0
                 },
                 replace,
             ),
-        }
-    }
-}
-
-#[repr(transparent)]
-struct Contrast(HIGHCONTRASTW);
-
-impl Drop for Contrast {
-    fn drop(&mut self) {
-        // SPI_GETHIGHCONTRAST allocates the scheme name; it is not part of our snapshot.
-        if !self.0.lpszDefaultScheme.is_null() {
-            let _ = unsafe { LocalFree(Some(HLOCAL(self.0.lpszDefaultScheme.0.cast()))) };
         }
     }
 }
@@ -107,16 +120,8 @@ fn update<T>(
     Ok(original)
 }
 
-struct State {
-    windows: usize,
-    saved: Vec<(Setting, u32)>,
-    recovery_path: Option<String>,
-}
-
-static STATE: Mutex<State> = Mutex::new(State { windows: 0, saved: Vec::new(), recovery_path: None });
-
 /// Separate interactive logons can share a user hive but have different active settings.
-fn recovery_path() -> windows::core::Result<String> {
+fn logon_id() -> windows::core::Result<String> {
     let mut token = HANDLE::default();
     unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)? };
     let mut statistics = TOKEN_STATISTICS::default();
@@ -128,7 +133,67 @@ fn recovery_path() -> windows::core::Result<String> {
     let _ = unsafe { CloseHandle(token) };
     result?;
     let logon = statistics.AuthenticationId;
-    Ok(format!(r"Software\Rustino\Kiosk\AccessibilityShortcuts\{:08X}{:08X}", logon.HighPart as u32, logon.LowPart))
+    Ok(format!("{:08X}{:08X}", logon.HighPart as u32, logon.LowPart))
+}
+
+fn recovery_path(logon: &str) -> String {
+    format!(r"Software\Rustino\Kiosk\AccessibilityShortcuts\{logon}")
+}
+
+/// Keeps the other processes of this logon out while one takes or restores the snapshot.
+struct Exclusive(HANDLE);
+
+impl Exclusive {
+    fn acquire(logon: &str) -> windows::core::Result<Self> {
+        let name = HSTRING::from(format!(r"Local\Rustino.Kiosk.AccessibilityShortcuts.{logon}.Lock"));
+        let mutex = unsafe { CreateMutexW(None, false, &name)? };
+        // Abandoned by a process that ended while holding it: it's ours all the same.
+        unsafe { WaitForSingleObject(mutex, INFINITE) };
+        Ok(Self(mutex))
+    }
+}
+
+impl Drop for Exclusive {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ReleaseMutex(self.0);
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+/// A named object that lives as long as a process of this logon has shortcuts disabled: the
+/// system closes the handle of a process that ends, however it ends.
+struct InUse(HANDLE);
+
+// A kernel handle, usable from any thread.
+unsafe impl Send for InUse {}
+
+impl InUse {
+    fn name(logon: &str) -> HSTRING {
+        HSTRING::from(format!(r"Local\Rustino.Kiosk.AccessibilityShortcuts.{logon}.InUse"))
+    }
+
+    fn join(logon: &str) -> windows::core::Result<Self> {
+        Ok(Self(unsafe { CreateEventW(None, true, false, &Self::name(logon))? }))
+    }
+
+    /// Whether another process still holds it. Call it after dropping ours.
+    fn held(logon: &str) -> bool {
+        match unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, &Self::name(logon)) } {
+            Ok(other) => {
+                let _ = unsafe { CloseHandle(other) };
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+impl Drop for InUse {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.0) };
+    }
 }
 
 struct RecoveryKey(HKEY);
@@ -175,27 +240,113 @@ impl Drop for RecoveryKey {
     fn drop(&mut self) { let _ = unsafe { RegCloseKey(self.0) }; }
 }
 
-fn snapshot() -> windows::core::Result<(String, Vec<(Setting, u32)>)> {
-    let path = recovery_path()?;
-    let key = RecoveryKey::open(&path)?;
-    let mut saved = Vec::new();
-    if key.read("Saved")? == Some(1) {
-        // A previous process ended before it could restore its shortcuts.
-        for setting in Setting::ALL {
-            let value = key.read(setting.name())?.ok_or_else(|| Error::from(E_FAIL))?;
-            saved.push((setting, value & SHORTCUT_FLAGS));
-        }
-    } else {
-        for setting in Setting::ALL {
-            let original = setting.update(None)?;
+/// Saves the shortcuts to put back, or brings up to date the ones already saved.
+fn snapshot(logon: &str) -> windows::core::Result<()> {
+    let key = RecoveryKey::open(&recovery_path(logon))?;
+    // Saved already: another process is in kiosk mode, or one ended before it could restore
+    // its shortcuts.
+    let saved = key.read("Saved")? == Some(1);
+    for setting in Setting::ALL {
+        let current = setting.update(None)?;
+        // A setting the snapshot doesn't have was never turned off: an older version left it.
+        let stored = if saved { key.read(setting.name())? } else { None };
+        // The kiosk left the saved ones off: one that is on was set by the user meanwhile,
+        // and that choice replaces the one saved before.
+        let original = match stored {
+            Some(stored) if current == 0 => stored & SHORTCUT_FLAGS,
+            _ => current,
+        };
+        if stored != Some(original) {
             key.write(setting.name(), original)?;
-            saved.push((setting, original));
         }
-        // Commit the complete recovery snapshot before changing any system setting.
+    }
+    // Commit the complete recovery snapshot before changing any system setting.
+    if !saved {
         key.write("Saved", 1)?;
     }
-    Ok((path, saved))
+    Ok(())
 }
+
+/// The shortcuts to put back: the snapshot is shared, and a process that came later may
+/// have brought it up to date.
+fn saved(logon: &str) -> windows::core::Result<Vec<(Setting, u32)>> {
+    let key = RecoveryKey::open(&recovery_path(logon))?;
+    if key.read("Saved")? != Some(1) {
+        return Err(Error::from(E_FAIL));
+    }
+    Setting::ALL
+        .into_iter()
+        .map(|setting| {
+            let stored = key.read(setting.name())?.ok_or_else(|| Error::from(E_FAIL))?;
+            Ok((setting, stored & SHORTCUT_FLAGS))
+        })
+        .collect()
+}
+
+/// The shortcuts this process turned off.
+struct Session {
+    logon: String,
+    in_use: InUse,
+}
+
+impl Session {
+    fn begin() -> windows::core::Result<Self> {
+        let logon = logon_id()?;
+        let _exclusive = Exclusive::acquire(&logon)?;
+        let in_use = InUse::join(&logon)?;
+        snapshot(&logon)?;
+        for setting in Setting::ALL {
+            if let Err(error) = setting.update(Some(0)) {
+                eprintln!("Rustino kiosk: could not disable {setting:?} shortcuts: {error}");
+            }
+        }
+        Ok(Self { logon, in_use })
+    }
+
+    fn end(self) {
+        let Self { logon, in_use } = self;
+        let _exclusive = Exclusive::acquire(&logon);
+        drop(in_use);
+        if InUse::held(&logon) {
+            // Another process is still in kiosk mode: the last one restores the shortcuts.
+            return;
+        }
+        let saved = match saved(&logon) {
+            Ok(saved) => saved,
+            Err(error) => {
+                eprintln!("Rustino kiosk: could not read the saved accessibility shortcuts: {error}");
+                return;
+            }
+        };
+        let mut restored = true;
+        for (setting, original) in saved {
+            // Read the current structure again: only restore the shortcut bits, keeping
+            // any unrelated accessibility settings changed while the kiosk was running.
+            if let Err(error) = setting.update(Some(original)) {
+                restored = false;
+                eprintln!("Rustino kiosk: could not restore {setting:?} shortcuts: {error}");
+            }
+        }
+        if restored {
+            let path = recovery_path(&logon);
+            let cleanup = || -> windows::core::Result<()> {
+                // Invalidate a restored snapshot even if removing its key fails.
+                RecoveryKey::open(&path)?.write("Saved", 0)?;
+                unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(path.as_str())).ok() }
+            };
+            if let Err(error) = cleanup() {
+                eprintln!("Rustino kiosk: could not remove the accessibility recovery snapshot: {error}");
+            }
+        }
+    }
+}
+
+struct State {
+    windows: usize,
+    session: Option<Session>,
+}
+
+static STATE: Mutex<State> = Mutex::new(State { windows: 0, session: None });
 
 pub struct Lock(());
 
@@ -203,17 +354,11 @@ impl Lock {
     pub fn new() -> Self {
         let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
         if state.windows == 0 {
-            match snapshot() {
-                Ok((path, saved)) => {
-                    state.recovery_path = Some(path);
-                    state.saved = saved;
-                    for &(setting, _) in &state.saved {
-                        if let Err(error) = setting.update(Some(0)) {
-                            eprintln!("Rustino kiosk: could not disable {setting:?} shortcuts: {error}");
-                        }
-                    }
+            match Session::begin() {
+                Ok(session) => state.session = Some(session),
+                Err(error) => {
+                    eprintln!("Rustino kiosk: could not save accessibility shortcuts; settings left unchanged: {error}")
                 }
-                Err(error) => eprintln!("Rustino kiosk: could not save accessibility shortcuts; settings left unchanged: {error}"),
             }
         }
         state.windows += 1;
@@ -225,26 +370,10 @@ impl Drop for Lock {
     fn drop(&mut self) {
         let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
         state.windows -= 1;
-        if state.windows == 0 {
-            let mut restored = true;
-            for (setting, original) in state.saved.drain(..) {
-                // Read the current structure again: only restore the shortcut bits, keeping
-                // any unrelated accessibility settings changed while the kiosk was running.
-                if let Err(error) = setting.update(Some(original)) {
-                    restored = false;
-                    eprintln!("Rustino kiosk: could not restore {setting:?} shortcuts: {error}");
-                }
-            }
-            if let Some(path) = state.recovery_path.take().filter(|_| restored) {
-                let cleanup = || -> windows::core::Result<()> {
-                    // Invalidate a restored snapshot even if removing its key fails.
-                    RecoveryKey::open(&path)?.write("Saved", 0)?;
-                    unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(path)).ok() }
-                };
-                if let Err(error) = cleanup() {
-                    eprintln!("Rustino kiosk: could not remove the accessibility recovery snapshot: {error}");
-                }
-            }
+        if state.windows == 0
+            && let Some(session) = state.session.take()
+        {
+            session.end();
         }
     }
 }

@@ -181,9 +181,8 @@ impl WindowRuntime {
             None => WebViewBuilder::new(),
         };
 
-        if config.devtools_enabled {
-            webview_builder = webview_builder.with_devtools(true);
-        }
+        // Always said: left alone, wry turns the developer tools on in debug builds.
+        webview_builder = webview_builder.with_devtools(config.devtools_enabled);
 
         if config.clipboard_enabled {
             webview_builder = webview_builder.with_clipboard(true);

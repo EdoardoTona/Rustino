@@ -28,7 +28,7 @@ public class StructLayoutTests
         var snapshot = AbiSnapshot.Load(SnapshotPath);
         var problems = new List<object>();
 
-        foreach (var rust in Contract.Crate.Structs)
+        foreach (var rust in Contract.Crate.Structs.Where(s => !ContractExceptions.RustOnlyStructs.ContainsKey(s.Name)))
         {
             var entry = snapshot.Find(rust.Name);
             if (entry is null)

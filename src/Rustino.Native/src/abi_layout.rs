@@ -136,8 +136,12 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// A `#[repr(C)]` line ending with this comment marks a struct that doesn't cross the boundary
+/// with .NET (the layout of a system interface, for instance): it isn't in the snapshot.
+const NOT_SHARED: &str = "// abi_layout: not shared with .NET";
+
 /// Names of the structs marked `#[repr(C...)]` in src/ (a plain line scan: attributes are
-/// expected on their own line, as rustfmt writes them).
+/// expected on their own line, as rustfmt writes them), without the ones marked `NOT_SHARED`.
 fn repr_c_structs_in_source() -> Vec<(String, String)> {
     let mut files = Vec::new();
     rust_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
@@ -147,7 +151,7 @@ fn repr_c_structs_in_source() -> Vec<(String, String)> {
         let mut pending = false;
         for line in text.lines().map(str::trim) {
             if line.starts_with("#[repr(C") {
-                pending = true;
+                pending = !line.ends_with(NOT_SHARED);
             } else if pending && line.starts_with("#[") {
                 continue;
             } else if pending {

@@ -4,7 +4,7 @@
 //!
 //! - Windows: borderless fullscreen and always on top; a low-level keyboard hook swallows the
 //!   shortcuts of the system (Windows key, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc, Alt+F4,
-//!   Alt+Space), PrintScreen, Search/Home, application launch keys, Sleep, F12 and Ctrl+Shift+I.
+//!   Alt+Space), PrintScreen, Search/Home, application launch keys and Alt+Shift+NumLock.
 //!   Accessibility activation shortcuts and edge swipes of touch screens are off. Touchpad gestures with three
 //!   and four fingers aren't keys and stay (`TouchpadGesturesController`, tried on build 26300,
 //!   turns on for a desktop app but gets none of them): the window comes back after them,
@@ -187,20 +187,21 @@ impl Checks {
 
 /// Whether the kiosk swallows a key (Windows virtual key code): the Windows keys with all their
 /// shortcuts, Alt+Tab, Alt+F4, Alt+Space (the window menu), Alt+Esc, Ctrl+Esc (Start) and
-/// Ctrl+Shift+Esc (Task Manager), system/application launch keys, PrintScreen, Sleep, developer
-/// tools shortcuts and Alt+Shift+NumLock. Shift activation sequences use accessibility APIs.
+/// Ctrl+Shift+Esc (Task Manager), system/application launch keys, PrintScreen, Sleep and
+/// Alt+Shift+NumLock. Shift activation sequences use accessibility APIs. The Sleep key is
+/// swallowed for the keyboards that send it as a key: the ones wired to the power manager
+/// don't come through here. F12 and Ctrl+Shift+I stay with the page: the developer tools
+/// open only when the host enabled them.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn is_system_shortcut(key: u32, alt: bool, ctrl: bool, shift: bool) -> bool {
     const TAB: u32 = 0x09;
     const ESCAPE: u32 = 0x1B;
     const SPACE: u32 = 0x20;
     const PRINT_SCREEN: u32 = 0x2C;
-    const I: u32 = 0x49;
     const LEFT_WIN: u32 = 0x5B;
     const RIGHT_WIN: u32 = 0x5C;
     const SLEEP: u32 = 0x5F;
     const F4: u32 = 0x73;
-    const F12: u32 = 0x7B;
     const NUM_LOCK: u32 = 0x90;
     const BROWSER_SEARCH: u32 = 0xAA;
     const BROWSER_HOME: u32 = 0xAC;
@@ -209,12 +210,11 @@ fn is_system_shortcut(key: u32, alt: bool, ctrl: bool, shift: bool) -> bool {
     const LAUNCH_APP1: u32 = 0xB6;
     const LAUNCH_APP2: u32 = 0xB7;
     match key {
-        LEFT_WIN | RIGHT_WIN | PRINT_SCREEN | SLEEP | F12 | BROWSER_SEARCH | BROWSER_HOME
-        | LAUNCH_MAIL | LAUNCH_MEDIA | LAUNCH_APP1 | LAUNCH_APP2 => true,
+        LEFT_WIN | RIGHT_WIN | PRINT_SCREEN | SLEEP | BROWSER_SEARCH | BROWSER_HOME | LAUNCH_MAIL
+        | LAUNCH_MEDIA | LAUNCH_APP1 | LAUNCH_APP2 => true,
         TAB | F4 | SPACE => alt,
         ESCAPE => alt || ctrl,
         NUM_LOCK => alt && shift,
-        I => ctrl && shift && !alt,
         _ => false,
     }
 }
@@ -449,7 +449,7 @@ mod platform {
             const IID: GUID = GUID::from_u128(0x4214f6fa_eb36_4e2f_9ca2_23fdc1832df7);
         }
 
-        #[repr(C)]
+        #[repr(C)] // abi_layout: not shared with .NET
         struct SettingsCacheVtable {
             base: IUnknown_Vtbl,
             on_setting_changed: unsafe extern "system" fn(*mut c_void, u32) -> HRESULT,
@@ -898,12 +898,11 @@ mod tests {
         assert!(is_system_shortcut(0x20, true, false, false), "Alt+Space");
         assert!(is_system_shortcut(ESCAPE, true, false, false), "Alt+Esc");
         assert!(is_system_shortcut(ESCAPE, false, true, false), "Ctrl+Esc, Ctrl+Shift+Esc");
-        for key in [0x2C, 0xAC, 0xB4, 0xB5, 0xB6, 0xB7, 0x5F, 0x7B] {
+        for key in [0x2C, 0xAC, 0xB4, 0xB5, 0xB6, 0xB7, 0x5F] {
             assert!(is_system_shortcut(key, false, false, false), "System key {key:#X}");
         }
         assert!(is_system_shortcut(0x2C, true, false, true), "Alt+Shift+PrintScreen");
         assert!(is_system_shortcut(0x90, true, false, true), "Alt+Shift+NumLock");
-        assert!(is_system_shortcut(0x49, false, true, true), "Ctrl+Shift+I");
     }
 
     #[test]
@@ -916,9 +915,8 @@ mod tests {
         assert!(!is_system_shortcut(0x20, false, false, false), "Space");
         assert!(!is_system_shortcut(0x41, true, true, false), "Ctrl+Alt+A: a secret combination of the host");
         assert!(!is_system_shortcut(0x45, false, true, true), "Ctrl+Shift+E: the sample's kiosk exit");
-        assert!(!is_system_shortcut(0x49, false, true, false), "Ctrl+I");
-        assert!(!is_system_shortcut(0x49, false, false, true), "Shift+I");
-        assert!(!is_system_shortcut(0x49, true, true, true), "AltGr+Shift+I");
+        assert!(!is_system_shortcut(0x7B, false, false, false), "F12: developer tools only if the host enabled them");
+        assert!(!is_system_shortcut(0x49, false, true, true), "Ctrl+Shift+I: as F12");
         assert!(!is_system_shortcut(0x90, false, false, false), "NumLock");
         for key in [0x10, 0xA0, 0xA1] {
             assert!(!is_system_shortcut(key, false, false, true), "Shift stays available to the page");
