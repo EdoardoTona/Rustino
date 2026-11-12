@@ -88,7 +88,14 @@
     {
         if (!firstRender) return;
         selfRef = DotNetObjectReference.Create(this);
-        await JS.InvokeVoidAsync("sample.watchColorScheme", selfRef);
+        try
+        {
+            await JS.InvokeVoidAsync("sample.watchColorScheme", selfRef);
+        }
+        catch (JSException)
+        {
+            // The script of the page failed: the color scheme isn't followed
+        }
     }
 
     // Called from app.js
@@ -105,7 +112,17 @@
 
     private void Notify() => RustinoWindow.ShowNotification("Rustino.Blazor", $"The counter is {count}");
 
-    private async Task GetUserAgent() => userAgent = await JS.InvokeAsync<string>("sample.userAgent");
+    private async Task GetUserAgent()
+    {
+        try
+        {
+            userAgent = await JS.InvokeAsync<string>("sample.userAgent");
+        }
+        catch (JSException e)
+        {
+            userAgent = e.Message;
+        }
+    }
 
     // Native events arrive outside Blazor's dispatcher: use InvokeAsync to update the UI
     private void OnSizeChanged(object? sender, SizeEventArgs e) =>
